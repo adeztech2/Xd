@@ -39,6 +39,36 @@ const cache = new Map(); // message id -> message (for anti-delete)
 const MAX_CACHE = 500;
 const num = (jid = '') => jid.split('@')[0].split(':')[0];
 
+// Messages we sent, kept so WhatsApp retry requests can be answered ("Waiting for this message" fix)
+const sentCache = new Map();
+const MAX_SENT = 1000;
+
+// Small in-memory store for Baileys' retry counters
+class MapCache {
+  constructor() { this.m = new Map(); }
+  get(k) { return this.m.get(k); }
+  set(k, v) { this.m.set(k, v); if (this.m.size > 5000) this.m.delete(this.m.keys().next().value); }
+  del(k) { this.m.delete(k); }
+  flushAll() { this.m.clear(); }
+}
+const retryCache = new MapCache();
+
+function detectHost() {
+  const e = process.env;
+  if (e.RENDER) return 'Render';
+  if (e.DYNO) return 'Heroku';
+  if (e.RAILWAY_ENVIRONMENT || e.RAILWAY_PROJECT_ID) return 'Railway';
+  if (e.KOYEB_APP_NAME) return 'Koyeb';
+  if (e.FLY_APP_NAME) return 'Fly.io';
+  if (e.REPL_ID || e.REPL_SLUG) return 'Replit';
+  if (e.VERCEL) return 'Vercel';
+  if (e.CODESPACES) return 'GitHub Codespaces';
+  if (e.PROJECT_DOMAIN) return 'Glitch';
+  if (e.P_SERVER_UUID) return 'Pterodactyl panel';
+  if (process.platform === 'win32') return 'Windows PC';
+  return process.platform === 'linux' ? 'VPS / Linux' : 'Local';
+}
+
 let announced = false; // so reconnects don't re-send the alert
 
 // Render / Railway web services need an open port, otherwise they kill the app ("No open ports detected").
@@ -118,6 +148,13 @@ async function start() {
       auth: state,
       browser: Browsers.ubuntu('Chrome'),
       markOnlineOnConnect: false,
+      syncFullHistory: false,
+      generateHighQualityLinkPreview: false,
+      // lets WhatsApp re-request messages the other side could not decrypt
+      getMessage: async (key) => sentCache.get(key.id) || cache.get(key.id)?.message || undefined,
+      msgRetryCounterCache: retryCache,
+      // faster group sends (no metadata fetch each time)
+      cachedGroupMetadata: async (jid) => metaCache.get(jid)?.meta,
     });
     sock = s;
 
@@ -136,9 +173,10 @@ async function start() {
           announced = true;
           const text = a.message
             .replace('{bot}', config.botName)
+            .replace('{number}', num(s.user.id))
             .replace('{time}', new Date().toLocaleString('en-GB', { timeZone: a.timezone }))
-            .replace('{host}', process.env.DYNO || process.env.HOSTNAME || 'local');
-          s.sendMessage(config.owner + '@s.whatsapp.net', { text }).catch(() => {});
+            .replace('{host}', detectHost());
+          s.sendMessage(jidNormalizedUser(s.user.id), { text }).catch(() => {});
         }
       }
 
@@ -171,6 +209,7 @@ async function start() {
 
     // ── Welcome ──
     s.ev.on('group-participants.update', async ({ id, participants, action }) => {
+      metaCache.delete(id); // membership changed, refresh on next use
       if (!config.welcome || !['add', 'remove'].includes(action)) return;
       const template = action === 'add' ? config.welcomeMessage : config.leaveMessage;
       if (!template) return;
@@ -213,8 +252,15 @@ function throttleSend(s) {
   let chain = Promise.resolve();
   s.sendMessage = (...a) => {
     const p = chain
-      .then(() => new Promise((r) => setTimeout(r, min + Math.random() * (max - min))))
-      .then(() => orig(...a));
+      .then(() => (max > 0 ? new Promise((r) => setTimeout(r, min + Math.random() * (max - min))) : null))
+      .then(async () => {
+        const res = await orig(...a);
+        if (res?.key?.id && res.message) {
+          sentCache.set(res.key.id, res.message);
+          if (sentCache.size > MAX_SENT) sentCache.delete(sentCache.keys().next().value);
+        }
+        return res;
+      });
     chain = p.catch(() => {});
     return p;
   };
@@ -342,11 +388,11 @@ async function handle(sock, m) {
   if (cmd.adminOnly && !ctx.isAdmin) return ctx.reply('Admins only.');
   if (cmd.adminOnly && !ctx.botIsAdmin) return ctx.reply('Make me admin first.');
 
-  if (config.autoRead) await sock.readMessages([m.key]).catch(() => {});
-  if (config.autoTyping) await sock.sendPresenceUpdate('composing', jid).catch(() => {});
+  if (config.autoRead) sock.readMessages([m.key]).catch(() => {});
+  if (config.autoTyping) sock.sendPresenceUpdate('composing', jid).catch(() => {});
 
   await cmd.run(ctx);
-  await sock.sendPresenceUpdate('paused', jid).catch(() => {});
+  if (config.autoTyping) sock.sendPresenceUpdate('paused', jid).catch(() => {});
 }
 
 // Graceful shutdown: Render sends SIGTERM to the old instance on every deploy.
