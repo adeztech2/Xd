@@ -42,7 +42,6 @@ const num = (jid = '') => jid.split('@')[0].split(':')[0];
 let announced = false; // so reconnects don't re-send the alert
 
 // Render / Railway web services need an open port, otherwise they kill the app ("No open ports detected").
-// Also keeps the process alive. Point an uptime pinger (e.g. UptimeRobot) at the URL on free plans.
 if (process.env.PORT) {
   http
     .createServer((req, res) => {
@@ -52,7 +51,32 @@ if (process.env.PORT) {
     .listen(process.env.PORT, () => console.log(`HTTP keep-alive on port ${process.env.PORT}`));
 }
 
-// Wipes the saved WhatsApp login (used when WhatsApp says we were logged out)
+// ── State shared across restarts of the socket ──
+let sock = null; // the ONE active socket
+let lockClient = null; // Postgres connection that holds the single-instance lock
+let starting = false;
+const LOCK_ID = 727272;
+
+// Only one instance may use the WhatsApp session at a time. During a Render deploy the new
+// instance waits here until the old one has shut down (and released the lock).
+async function acquireLock() {
+  if (!pool || lockClient) return;
+  const client = await pool.connect();
+  client.on('error', (e) => {
+    console.error('lock connection lost:', e.message);
+    process.exit(1); // let Render restart us cleanly
+  });
+  for (;;) {
+    const r = await client.query('SELECT pg_try_advisory_lock($1) AS ok', [LOCK_ID]);
+    if (r.rows[0].ok) break;
+    console.log('Another instance is running, waiting for it to stop...');
+    await new Promise((res) => setTimeout(res, 5000));
+  }
+  lockClient = client;
+  console.log('Instance lock acquired');
+}
+
+// Wipes the saved WhatsApp login (used only when WhatsApp says we were really logged out)
 async function clearSession() {
   if (pool) {
     await pool.query('DELETE FROM auth_state WHERE id LIKE $1', [`${process.env.SESSION_ID || 'main'}:%`]);
@@ -62,98 +86,120 @@ async function clearSession() {
 }
 
 async function start() {
-  await init();
-  await importSession();
-  const { state, saveCreds } = pool
-    ? await usePgAuthState(pool, process.env.SESSION_ID || 'main')
-    : await useMultiFileAuthState(config.sessionDir);
-  const { version } = await fetchLatestBaileysVersion();
+  if (starting) return; // never run two start() calls at once
+  starting = true;
+  try {
+    // End the previous socket so it can't keep reconnecting or fighting with the new one
+    if (sock) {
+      try { sock.end(undefined); } catch {}
+      sock = null;
+    }
 
-  const sock = makeWASocket({
-    version,
-    logger: pino({ level: 'silent' }),
-    auth: state,
-    browser: Browsers.ubuntu('Chrome'),
-    markOnlineOnConnect: false,
-  });
+    await init();
+    await acquireLock();
+    await importSession();
+    console.log(pool ? 'Session storage: Postgres' : 'Session storage: LOCAL files (lost on every redeploy!)');
 
-  throttleSend(sock);
+    const { state, saveCreds } = pool
+      ? await usePgAuthState(pool, process.env.SESSION_ID || 'main')
+      : await useMultiFileAuthState(config.sessionDir);
 
-  // Pairing-code login (no QR needed)
-  if (!sock.authState.creds.registered) {
-    setTimeout(async () => {
-      try {
-        const code = await sock.requestPairingCode(config.pairNumber);
-        console.log(`\n🔑 Pairing code: ${code}\nWhatsApp > Linked devices > Link with phone number\n`);
-      } catch (e) {
-        console.error('Pairing failed:', e.message);
+    // No pairing codes here. The bot only runs with a session made by the pair page.
+    if (!state.creds.registered) {
+      console.log('No WhatsApp session found. Create one with your pair page, set SESSION_DATA on Render, then redeploy.');
+      return; // stay idle (HTTP server keeps running), no reconnect loop
+    }
+
+    const { version } = await fetchLatestBaileysVersion();
+
+    const s = makeWASocket({
+      version,
+      logger: pino({ level: 'silent' }),
+      auth: state,
+      browser: Browsers.ubuntu('Chrome'),
+      markOnlineOnConnect: false,
+    });
+    sock = s;
+
+    throttleSend(s);
+
+    s.ev.on('creds.update', saveCreds);
+
+    s.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
+      if (s !== sock) return; // ignore events from old sockets
+
+      if (connection === 'open') {
+        console.log(`✅ ${config.botName} connected as ${num(s.user.id)}`);
+
+        const a = config.startupAlert;
+        if (a?.enabled && !announced) {
+          announced = true;
+          const text = a.message
+            .replace('{bot}', config.botName)
+            .replace('{time}', new Date().toLocaleString('en-GB', { timeZone: a.timezone }))
+            .replace('{host}', process.env.DYNO || process.env.HOSTNAME || 'local');
+          s.sendMessage(config.owner + '@s.whatsapp.net', { text }).catch(() => {});
+        }
       }
-    }, 3000);
+
+      if (connection === 'close') {
+        const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
+
+        if (code === DisconnectReason.loggedOut) {
+          console.log('Logged out by WhatsApp (401). Clearing the saved session...');
+          announced = false;
+          await clearSession().catch((e) => console.error('clear session failed:', e.message));
+          setTimeout(start, 3000);
+        } else if (code === DisconnectReason.connectionReplaced) {
+          // Another instance/device is using this login. Do NOT reconnect (that causes a fight).
+          console.log('Connection replaced by another instance (440). Exiting.');
+          process.exit(0);
+        } else {
+          console.log(`Connection closed (${code}), reconnecting...`);
+          setTimeout(start, 3000);
+        }
+      }
+    });
+
+    // ── Anti-call ──
+    s.ev.on('call', async (calls) => {
+      if (!config.antiCall) return;
+      for (const c of calls) {
+        if (c.status === 'offer') await s.rejectCall(c.id, c.from).catch(() => {});
+      }
+    });
+
+    // ── Welcome ──
+    s.ev.on('group-participants.update', async ({ id, participants, action }) => {
+      if (!config.welcome || !['add', 'remove'].includes(action)) return;
+      const template = action === 'add' ? config.welcomeMessage : config.leaveMessage;
+      if (!template) return;
+      for (const p of participants) {
+        const jid = typeof p === 'string' ? p : p.id;
+        await s.sendMessage(id, {
+          text: template.replace(/@user/g, `@${num(jid)}`),
+          mentions: [jid],
+        });
+      }
+    });
+
+    // ── Messages ──
+    s.ev.on('messages.upsert', async ({ messages, type }) => {
+      if (type !== 'notify') return;
+      for (const m of messages) {
+        try {
+          await handle(s, m);
+        } catch (e) {
+          console.error('handler error:', e.message);
+        }
+      }
+    });
+  } catch (e) {
+    console.error('start failed:', e.message);
+    setTimeout(start, 5000);
+  } finally {
+    starting = false;
   }
-
-  sock.ev.on('creds.update', saveCreds);
-
-  sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
-    if (connection === 'open') {
-      console.log(`✅ ${config.botName} connected as ${num(sock.user.id)}`);
-
-      const a = config.startupAlert;
-      if (a?.enabled && !announced) {
-        announced = true;
-        const text = a.message
-          .replace('{bot}', config.botName)
-          .replace('{time}', new Date().toLocaleString('en-GB', { timeZone: a.timezone }))
-          .replace('{host}', process.env.DYNO || process.env.HOSTNAME || 'local');
-        sock.sendMessage(config.owner + '@s.whatsapp.net', { text }).catch(() => {});
-      }
-    }
-    if (connection === 'close') {
-      const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
-      if (code === DisconnectReason.loggedOut) {
-        console.log('Logged out by WhatsApp. Clearing the saved session and requesting a new pairing code...');
-        announced = false;
-        await clearSession().catch((e) => console.error('clear session failed:', e.message));
-        setTimeout(start, 3000);
-      } else {
-        console.log('Connection closed, reconnecting...');
-        setTimeout(start, 3000);
-      }
-    }
-  });
-
-  // ── Anti-call ──
-  sock.ev.on('call', async (calls) => {
-    if (!config.antiCall) return;
-    for (const c of calls) {
-      if (c.status === 'offer') await sock.rejectCall(c.id, c.from).catch(() => {});
-    }
-  });
-
-  // ── Welcome ──
-  sock.ev.on('group-participants.update', async ({ id, participants, action }) => {
-    if (!config.welcome || !['add', 'remove'].includes(action)) return;
-    const template = action === 'add' ? config.welcomeMessage : config.leaveMessage;
-    if (!template) return;
-    for (const p of participants) {
-      const jid = typeof p === 'string' ? p : p.id;
-      await sock.sendMessage(id, {
-        text: template.replace(/@user/g, `@${num(jid)}`),
-        mentions: [jid],
-      });
-    }
-  });
-
-  // ── Messages ──
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
-    for (const m of messages) {
-      try {
-        await handle(sock, m);
-      } catch (e) {
-        console.error('handler error:', e.message);
-      }
-    }
-  });
 }
 
 function unwrap(msg = {}) {
@@ -161,11 +207,11 @@ function unwrap(msg = {}) {
 }
 
 // Human-like pacing: every outgoing message waits a random delay, one at a time
-function throttleSend(sock) {
-  const orig = sock.sendMessage.bind(sock);
+function throttleSend(s) {
+  const orig = s.sendMessage.bind(s);
   const [min, max] = config.sendDelay || [0, 0];
   let chain = Promise.resolve();
-  sock.sendMessage = (...a) => {
+  s.sendMessage = (...a) => {
     const p = chain
       .then(() => new Promise((r) => setTimeout(r, min + Math.random() * (max - min))))
       .then(() => orig(...a));
@@ -185,10 +231,10 @@ function limited(sender) {
 }
 
 const metaCache = new Map();
-async function getMeta(sock, jid) {
+async function getMeta(s, jid) {
   const hit = metaCache.get(jid);
   if (hit && Date.now() - hit.t < 60000) return hit.meta;
-  const meta = await sock.groupMetadata(jid);
+  const meta = await s.groupMetadata(jid);
   metaCache.set(jid, { meta, t: Date.now() });
   return meta;
 }
@@ -302,6 +348,17 @@ async function handle(sock, m) {
   await cmd.run(ctx);
   await sock.sendPresenceUpdate('paused', jid).catch(() => {});
 }
+
+// Graceful shutdown: Render sends SIGTERM to the old instance on every deploy.
+// Close the socket and release the lock so the new instance can take over cleanly.
+function shutdown() {
+  console.log('Shutting down...');
+  try { sock?.end(undefined); } catch {}
+  try { lockClient?.release(); } catch {}
+  setTimeout(() => process.exit(0), 500);
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
 
 // Anti-crash: log instead of dying (use pm2 / the panel's auto-restart for hard crashes)
 process.on('uncaughtException', (e) => console.error('uncaught:', e.message));
