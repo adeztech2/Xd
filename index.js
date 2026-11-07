@@ -10,10 +10,12 @@ const { Boom } = require('@hapi/boom');
 const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 const config = require('./config');
 const db = require('./db');
 const { pool, init } = require('./pg');
 const { usePgAuthState } = require('./auth-pg');
+const { importSession } = require('./session-import');
 
 // ── Load commands (each file exports an array) ──
 const commands = new Map();
@@ -39,8 +41,29 @@ const num = (jid = '') => jid.split('@')[0].split(':')[0];
 
 let announced = false; // so reconnects don't re-send the alert
 
+// Render / Railway web services need an open port, otherwise they kill the app ("No open ports detected").
+// Also keeps the process alive. Point an uptime pinger (e.g. UptimeRobot) at the URL on free plans.
+if (process.env.PORT) {
+  http
+    .createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end(`${config.botName} is running`);
+    })
+    .listen(process.env.PORT, () => console.log(`HTTP keep-alive on port ${process.env.PORT}`));
+}
+
+// Wipes the saved WhatsApp login (used when WhatsApp says we were logged out)
+async function clearSession() {
+  if (pool) {
+    await pool.query('DELETE FROM auth_state WHERE id LIKE $1', [`${process.env.SESSION_ID || 'main'}:%`]);
+  } else {
+    fs.rmSync(config.sessionDir, { recursive: true, force: true });
+  }
+}
+
 async function start() {
   await init();
+  await importSession();
   const { state, saveCreds } = pool
     ? await usePgAuthState(pool, process.env.SESSION_ID || 'main')
     : await useMultiFileAuthState(config.sessionDir);
@@ -70,7 +93,7 @@ async function start() {
 
   sock.ev.on('creds.update', saveCreds);
 
-  sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
+  sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
     if (connection === 'open') {
       console.log(`✅ ${config.botName} connected as ${num(sock.user.id)}`);
 
@@ -87,7 +110,10 @@ async function start() {
     if (connection === 'close') {
       const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
       if (code === DisconnectReason.loggedOut) {
-        console.log('Logged out. Delete the session folder and pair again.');
+        console.log('Logged out by WhatsApp. Clearing the saved session and requesting a new pairing code...');
+        announced = false;
+        await clearSession().catch((e) => console.error('clear session failed:', e.message));
+        setTimeout(start, 3000);
       } else {
         console.log('Connection closed, reconnecting...');
         setTimeout(start, 3000);
