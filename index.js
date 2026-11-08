@@ -26,13 +26,11 @@ const config = require('./config');
 const db = require('./db');
 const { pool, init } = require('./pg');
 const { usePgAuthState } = require('./auth-pg');
-// SESSION_ID must start with ADEZ-XMD~ (validated in session-import.js)
 const { importSession, STORE_KEY } = require('./session-import');
 
 const GROUP_LINK = 'https://chat.whatsapp.com/CvpcZcqPckCCIFT1QpQsqs';
 const CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb8N0xYLikgHxdGh790m';
 
-// ── Load commands (each file exports an array) ──
 const commands = new Map();
 const list = [];
 for (const f of fs.readdirSync(path.join(__dirname, 'commands')).filter((f) => f.endsWith('.js'))) {
@@ -43,27 +41,23 @@ for (const f of fs.readdirSync(path.join(__dirname, 'commands')).filter((f) => f
   }
 }
 
-// ── Load plugins (plugins/*.js with events: { message }) ──
 const plugins = [];
 const pdir = path.join(__dirname, 'plugins');
 if (fs.existsSync(pdir)) {
   for (const f of fs.readdirSync(pdir).filter((f) => f.endsWith('.js'))) plugins.push(require('./plugins/' + f));
 }
 
-const cache = new Map(); // message id -> message (for anti-delete)
+const cache = new Map();
 const MAX_CACHE = 500;
 const num = (jid = '') => jid.split('@')[0].split(':')[0];
-// Masked version for logs, so phone numbers don't sit in log history
 const mask = (jid = '') => {
   const n = num(jid);
   return n.length > 4 ? `${n.slice(0, 4)}****` : '****';
 };
 
-// Messages we sent, kept so WhatsApp retry requests can be answered ("Waiting for this message" fix)
 const sentCache = new Map();
 const MAX_SENT = 1000;
 
-// Small in-memory store for Baileys' retry counters
 class MapCache {
   constructor() { this.m = new Map(); }
   get(k) { return this.m.get(k); }
@@ -89,7 +83,6 @@ function detectHost() {
   return process.platform === 'linux' ? 'VPS / Linux' : 'Local';
 }
 
-// Startup message text sent to the bot's own chat when it connects
 function buildStartupAlert(s) {
   const LINE = '──────────────';
   const tz = config.startupAlert?.timezone || 'UTC';
@@ -118,9 +111,19 @@ function buildStartupAlert(s) {
   ].join('\n');
 }
 
-let announced = false; // so reconnects don't re-send the alert
+function formatBotReply(text) {
+  if (!config.replyStyle?.enabled) return String(text || '');
+  const style = config.replyStyle;
+  const header = [
+    `${style.title || 'WhatsApp Business'}${style.subtitle ? ` ${style.subtitle ? '•' : ''} ${style.subtitle}` : ''}`,
+    `${style.contactLabel || 'Contact'}: ${style.contactValue || config.botName || 'Arnold Adez'}`,
+    style.divider || '━━━━━━━━━━━━━━',
+  ].join('\n');
+  return `${header}\n${String(text || '')}`;
+}
 
-// Web hosts need an open port. Only start the HTTP server when PORT is set (Render, Railway, etc.).
+let announced = false;
+
 if (process.env.PORT) {
   http
     .createServer((req, res) => {
@@ -130,21 +133,18 @@ if (process.env.PORT) {
     .listen(process.env.PORT, () => console.log(`HTTP keep-alive on port ${process.env.PORT}`));
 }
 
-// ── State shared across restarts of the socket ──
-let sock = null; // the ONE active socket
-let lockClient = null; // Postgres connection that holds the single-instance lock
+let sock = null;
+let lockClient = null;
 let starting = false;
-let replaced = false; // set when another device/instance took over this session
+let replaced = false;
 const LOCK_ID = 727272;
 
-// Only one instance may use the WhatsApp session at a time. During a deploy the new
-// instance waits here until the old one has shut down (and released the lock).
 async function acquireLock() {
   if (!pool || lockClient) return;
   const client = await pool.connect();
   client.on('error', (e) => {
     console.error('lock connection lost:', e.message);
-    process.exit(1); // let the platform restart us cleanly
+    process.exit(1);
   });
   for (;;) {
     const r = await client.query('SELECT pg_try_advisory_lock($1) AS ok', [LOCK_ID]);
@@ -156,7 +156,6 @@ async function acquireLock() {
   console.log('Instance lock acquired');
 }
 
-// Wipes the saved WhatsApp login (used only when WhatsApp says we were really logged out)
 async function clearSession() {
   if (pool) {
     await pool.query('DELETE FROM auth_state WHERE id LIKE $1', [`${STORE_KEY}:%`]);
@@ -166,11 +165,10 @@ async function clearSession() {
 }
 
 async function start() {
-  if (starting) return; // never run two start() calls at once
-  if (replaced) return; // another instance owns this session now; do not fight it
+  if (starting) return;
+  if (replaced) return;
   starting = true;
   try {
-    // End the previous socket so it can't keep reconnecting or fighting with the new one
     if (sock) {
       try { sock.end(undefined); } catch {}
       sock = null;
@@ -185,10 +183,9 @@ async function start() {
       ? await usePgAuthState(pool, STORE_KEY)
       : await useMultiFileAuthState(config.sessionDir);
 
-    // No pairing codes here. The bot only runs with a session made by the pair page.
     if (!state.creds.registered) {
       console.log('No WhatsApp session found. Create one with your pair page, set SESSION_ID in the app config vars, then restart the worker.');
-      return; // stay idle, no reconnect loop
+      return;
     }
 
     const { version } = await fetchLatestBaileysVersion();
@@ -197,14 +194,12 @@ async function start() {
       version,
       logger: pino({ level: 'silent' }),
       auth: state,
-      browser: Browsers.macOS('Safari'),
+      browser: Browsers.ubuntu('Chrome'),
       markOnlineOnConnect: false,
       syncFullHistory: false,
       generateHighQualityLinkPreview: false,
-      // lets WhatsApp re-request messages the other side could not decrypt
       getMessage: async (key) => sentCache.get(key.id) || cache.get(key.id)?.message || undefined,
       msgRetryCounterCache: retryCache,
-      // faster group sends (no metadata fetch each time)
       cachedGroupMetadata: async (jid) => metaCache.get(jid)?.meta,
     });
     sock = s;
@@ -214,7 +209,7 @@ async function start() {
     s.ev.on('creds.update', saveCreds);
 
     s.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
-      if (s !== sock) return; // ignore events from old sockets
+      if (s !== sock) return;
 
       if (connection === 'open') {
         console.log(`✅ ${config.botName} connected as ${mask(s.user.id)}`);
@@ -228,27 +223,12 @@ async function start() {
               text,
               footer: `${config.botName} • ADEZ TECH`,
               interactiveButtons: [
-                {
-                  name: 'cta_url',
-                  buttonParamsJson: JSON.stringify({
-                    display_text: '📢 Follow Channel',
-                    url: CHANNEL_LINK,
-                    merchant_url: CHANNEL_LINK,
-                  }),
-                },
-                {
-                  name: 'cta_url',
-                  buttonParamsJson: JSON.stringify({
-                    display_text: '👥 Join Group',
-                    url: GROUP_LINK,
-                    merchant_url: GROUP_LINK,
-                  }),
-                },
+                { name: 'cta_url', buttonParamsJson: JSON.stringify({ display_text: '📢 Follow Channel', url: CHANNEL_LINK, merchant_url: CHANNEL_LINK }) },
+                { name: 'cta_url', buttonParamsJson: JSON.stringify({ display_text: '👥 Join Group', url: GROUP_LINK, merchant_url: GROUP_LINK }) },
               ],
             });
           } catch (e) {
             console.error('startup alert buttons failed:', e.message);
-            // fall back to plain text with the links, so the alert is never lost
             await s.sendMessage(jid, { text: `${text}\n\n📢 ${CHANNEL_LINK}\n👥 ${GROUP_LINK}` }).catch(() => {});
           }
         }
@@ -263,8 +243,6 @@ async function start() {
           await clearSession().catch((e) => console.error('clear session failed:', e.message));
           setTimeout(start, 3000);
         } else if (code === DisconnectReason.connectionReplaced) {
-          // Another device or instance took over this login. Stop reconnecting so we don't
-          // fight it. Stay alive but idle so the platform doesn't restart us in a loop.
           console.error('Connection replaced by another instance (440). Reconnect disabled. Restart the worker to take the session back.');
           replaced = true;
           sock = null;
@@ -275,7 +253,6 @@ async function start() {
       }
     });
 
-    // ── Anti-call ──
     s.ev.on('call', async (calls) => {
       if (!config.antiCall) return;
       for (const c of calls) {
@@ -283,9 +260,8 @@ async function start() {
       }
     });
 
-    // ── Welcome ──
     s.ev.on('group-participants.update', async ({ id, participants, action }) => {
-      metaCache.delete(id); // membership changed, refresh on next use
+      metaCache.delete(id);
       if (!config.welcome || !['add', 'remove'].includes(action)) return;
       const template = action === 'add' ? config.welcomeMessage : config.leaveMessage;
       if (!template) return;
@@ -298,7 +274,6 @@ async function start() {
       }
     });
 
-    // ── Messages ──
     s.ev.on('messages.upsert', async ({ messages, type }) => {
       if (type !== 'notify') return;
       for (const m of messages) {
@@ -321,7 +296,6 @@ function unwrap(msg = {}) {
   return msg.ephemeralMessage?.message || msg.viewOnceMessage?.message || msg.viewOnceMessageV2?.message || msg.documentWithCaptionMessage?.message || msg;
 }
 
-// Human-like pacing: every outgoing message waits a random delay, one at a time
 function throttleSend(s) {
   const orig = s.sendMessage.bind(s);
   const [min, max] = config.sendDelay || [0, 0];
@@ -365,7 +339,6 @@ async function handle(sock, m) {
   if (!m.message) return;
   const jid = m.key.remoteJid;
 
-  // Auto-view status
   if (jid === 'status@broadcast') {
     if (config.autoStatusView) await sock.readMessages([m.key]).catch(() => {});
     if (config.autoStatusReact?.enabled && !m.key.fromMe && m.key.participant) {
@@ -383,11 +356,9 @@ async function handle(sock, m) {
     return;
   }
 
-  // Anti-delete
   const proto = m.message.protocolMessage;
   if (proto && proto.type === 0) {
     const orig = cache.get(proto.key?.id);
-    // Skip when no owner is configured, so we never send to an invalid JID
     if (config.antiDelete && config.owner && orig && !orig.key.fromMe) {
       const ownerJid = config.owner + '@s.whatsapp.net';
       const who = orig.key.participant || orig.key.remoteJid;
@@ -404,12 +375,7 @@ async function handle(sock, m) {
   if (cache.size > MAX_CACHE) cache.delete(cache.keys().next().value);
 
   const msg = unwrap(m.message);
-  const body =
-    msg.conversation ||
-    msg.extendedTextMessage?.text ||
-    msg.imageMessage?.caption ||
-    msg.videoMessage?.caption ||
-    '';
+  const body = msg.conversation || msg.extendedTextMessage?.text || msg.imageMessage?.caption || msg.videoMessage?.caption || '';
 
   const prefix = config.prefix.find((p) => body.startsWith(p));
   const [cmdName, ...args] = prefix ? body.slice(prefix.length).trim().split(/\s+/) : [];
@@ -426,7 +392,7 @@ async function handle(sock, m) {
     mentioned: ci?.mentionedJid || [],
     quotedSender: ci?.participant,
     quotedMsg: ci?.quotedMessage,
-    reply: (text, opts = {}) => sock.sendMessage(jid, { text, ...opts }, { quoted: m }),
+    reply: (text, opts = {}) => sock.sendMessage(jid, { text: formatBotReply(text), ...opts }, { quoted: m }),
     group: {
       kick: (u) => sock.groupParticipantsUpdate(jid, [u], 'remove'),
       promote: (u) => sock.groupParticipantsUpdate(jid, [u], 'promote'),
@@ -447,17 +413,14 @@ async function handle(sock, m) {
     }
   }
 
-  // Access gate: in private mode, strangers get nothing (no plugins, no commands)
   if (!config.publicMode && !isOwner) return;
 
-  // ── Plugin hooks (run for allowed users, except the bot's own messages) ──
   if (!m.key.fromMe) {
     for (const p of plugins) {
       if (p.events?.message) await p.events.message(ctx, { db }).catch((e) => console.error(`[${p.name}]`, e.message));
     }
   }
 
-  // ── Commands ──
   const cmd = commands.get((cmdName || '').toLowerCase());
   if (!cmd) return;
 
@@ -474,8 +437,6 @@ async function handle(sock, m) {
   if (config.autoTyping) sock.sendPresenceUpdate('paused', jid).catch(() => {});
 }
 
-// Graceful shutdown: release the advisory lock explicitly, then exit.
-// Destroying the client (release(true)) also drops any lock Postgres still holds.
 let shuttingDown = false;
 async function shutdown() {
   if (shuttingDown) return;
@@ -491,7 +452,6 @@ async function shutdown() {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-// Anti-crash: log instead of dying (use the platform's auto-restart for hard crashes)
 process.on('uncaughtException', (e) => console.error('uncaught:', e.message));
 process.on('unhandledRejection', (e) => console.error('unhandled:', e?.message || e));
 
