@@ -15,7 +15,7 @@ const config = require('./config');
 const db = require('./db');
 const { pool, init } = require('./pg');
 const { usePgAuthState } = require('./auth-pg');
-const { importSession } = require('./session-import');
+const { importSession, STORE_KEY } = require('./session-import');
 
 // ── Load commands (each file exports an array) ──
 const commands = new Map();
@@ -38,6 +38,11 @@ if (fs.existsSync(pdir)) {
 const cache = new Map(); // message id -> message (for anti-delete)
 const MAX_CACHE = 500;
 const num = (jid = '') => jid.split('@')[0].split(':')[0];
+// Masked version for logs, so phone numbers don't sit in log history
+const mask = (jid = '') => {
+  const n = num(jid);
+  return n.length > 4 ? `${n.slice(0, 4)}****` : '****';
+};
 
 // Messages we sent, kept so WhatsApp retry requests can be answered ("Waiting for this message" fix)
 const sentCache = new Map();
@@ -69,9 +74,35 @@ function detectHost() {
   return process.platform === 'linux' ? 'VPS / Linux' : 'Local';
 }
 
+// Startup message sent to the bot's own chat when it connects
+function buildStartupAlert(s) {
+  const tz = config.startupAlert?.timezone || 'UTC';
+  const time = new Date().toLocaleString('en-GB', {
+    timeZone: tz,
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
+  const { version } = require('./package.json');
+  const prefix = (config.prefix || ['.'])[0];
+
+  return [
+    `✨ *${config.botName}* is online`,
+    '',
+    `📱 Number: ${num(s.user.id)}`,
+    `🕒 Time: ${time}`,
+    `🌍 Host: ${detectHost()}`,
+    `⚙️ Mode: ${config.publicMode ? 'Public' : 'Private'}`,
+    `⌨️ Prefix: ${prefix}`,
+    `🧩 Version: v${version}`,
+    `🟢 Node: ${process.version}`,
+    '',
+    `Type ${prefix}menu to get started.`,
+  ].join('\n');
+}
+
 let announced = false; // so reconnects don't re-send the alert
 
-// Render / Railway web services need an open port, otherwise they kill the app ("No open ports detected").
+// Web hosts need an open port. Only start the HTTP server when PORT is set (Render, Railway, etc.).
 if (process.env.PORT) {
   http
     .createServer((req, res) => {
@@ -85,16 +116,17 @@ if (process.env.PORT) {
 let sock = null; // the ONE active socket
 let lockClient = null; // Postgres connection that holds the single-instance lock
 let starting = false;
+let replaced = false; // set when another device/instance took over this session
 const LOCK_ID = 727272;
 
-// Only one instance may use the WhatsApp session at a time. During a Render deploy the new
+// Only one instance may use the WhatsApp session at a time. During a deploy the new
 // instance waits here until the old one has shut down (and released the lock).
 async function acquireLock() {
   if (!pool || lockClient) return;
   const client = await pool.connect();
   client.on('error', (e) => {
     console.error('lock connection lost:', e.message);
-    process.exit(1); // let Render restart us cleanly
+    process.exit(1); // let the platform restart us cleanly
   });
   for (;;) {
     const r = await client.query('SELECT pg_try_advisory_lock($1) AS ok', [LOCK_ID]);
@@ -109,7 +141,7 @@ async function acquireLock() {
 // Wipes the saved WhatsApp login (used only when WhatsApp says we were really logged out)
 async function clearSession() {
   if (pool) {
-    await pool.query('DELETE FROM auth_state WHERE id LIKE $1', [`${process.env.SESSION_ID || 'main'}:%`]);
+    await pool.query('DELETE FROM auth_state WHERE id LIKE $1', [`${STORE_KEY}:%`]);
   } else {
     fs.rmSync(config.sessionDir, { recursive: true, force: true });
   }
@@ -117,6 +149,7 @@ async function clearSession() {
 
 async function start() {
   if (starting) return; // never run two start() calls at once
+  if (replaced) return; // another instance owns this session now; do not fight it
   starting = true;
   try {
     // End the previous socket so it can't keep reconnecting or fighting with the new one
@@ -131,13 +164,13 @@ async function start() {
     console.log(pool ? 'Session storage: Postgres' : 'Session storage: LOCAL files (lost on every redeploy!)');
 
     const { state, saveCreds } = pool
-      ? await usePgAuthState(pool, process.env.SESSION_ID || 'main')
+      ? await usePgAuthState(pool, STORE_KEY)
       : await useMultiFileAuthState(config.sessionDir);
 
     // No pairing codes here. The bot only runs with a session made by the pair page.
     if (!state.creds.registered) {
-      console.log('No WhatsApp session found. Create one with your pair page, set SESSION_DATA on Render, then redeploy.');
-      return; // stay idle (HTTP server keeps running), no reconnect loop
+      console.log('No WhatsApp session found. Create one with your pair page, set SESSION_ID in the app config vars, then restart the worker.');
+      return; // stay idle, no reconnect loop
     }
 
     const { version } = await fetchLatestBaileysVersion();
@@ -166,17 +199,11 @@ async function start() {
       if (s !== sock) return; // ignore events from old sockets
 
       if (connection === 'open') {
-        console.log(`✅ ${config.botName} connected as ${num(s.user.id)}`);
+        console.log(`✅ ${config.botName} connected as ${mask(s.user.id)}`);
 
-        const a = config.startupAlert;
-        if (a?.enabled && !announced) {
+        if (config.startupAlert?.enabled && !announced) {
           announced = true;
-          const text = a.message
-            .replace('{bot}', config.botName)
-            .replace('{number}', num(s.user.id))
-            .replace('{time}', new Date().toLocaleString('en-GB', { timeZone: a.timezone }))
-            .replace('{host}', detectHost());
-          s.sendMessage(jidNormalizedUser(s.user.id), { text }).catch(() => {});
+          s.sendMessage(jidNormalizedUser(s.user.id), { text: buildStartupAlert(s) }).catch(() => {});
         }
       }
 
@@ -189,9 +216,11 @@ async function start() {
           await clearSession().catch((e) => console.error('clear session failed:', e.message));
           setTimeout(start, 3000);
         } else if (code === DisconnectReason.connectionReplaced) {
-          // Another instance/device is using this login. Do NOT reconnect (that causes a fight).
-          console.log('Connection replaced by another instance (440). Exiting.');
-          process.exit(0);
+          // Another device or instance took over this login. Stop reconnecting so we don't
+          // fight it. Stay alive but idle so the platform doesn't restart us in a loop.
+          console.error('Connection replaced by another instance (440). Reconnect disabled. Restart the worker to take the session back.');
+          replaced = true;
+          sock = null;
         } else {
           console.log(`Connection closed (${code}), reconnecting...`);
           setTimeout(start, 3000);
@@ -311,13 +340,14 @@ async function handle(sock, m) {
   const proto = m.message.protocolMessage;
   if (proto && proto.type === 0) {
     const orig = cache.get(proto.key?.id);
-    if (config.antiDelete && orig && !orig.key.fromMe) {
+    // Skip when no owner is configured, so we never send to an invalid JID
+    if (config.antiDelete && config.owner && orig && !orig.key.fromMe) {
       const ownerJid = config.owner + '@s.whatsapp.net';
       const who = orig.key.participant || orig.key.remoteJid;
       await sock.sendMessage(ownerJid, {
         text: `🚨 *Anti-Delete*\n👤 @${num(who)}\n💬 ${jid}`,
         mentions: [who],
-      });
+      }).catch((e) => console.error('anti-delete alert failed:', e.message));
       await sock.sendMessage(ownerJid, { forward: orig }).catch(() => {});
     }
     return;
@@ -370,7 +400,10 @@ async function handle(sock, m) {
     }
   }
 
-  // ── Plugin hooks (run for everyone, except the bot's own messages) ──
+  // Access gate: in private mode, strangers get nothing (no plugins, no commands)
+  if (!config.publicMode && !isOwner) return;
+
+  // ── Plugin hooks (run for allowed users, except the bot's own messages) ──
   if (!m.key.fromMe) {
     for (const p of plugins) {
       if (p.events?.message) await p.events.message(ctx, { db }).catch((e) => console.error(`[${p.name}]`, e.message));
@@ -381,7 +414,6 @@ async function handle(sock, m) {
   const cmd = commands.get((cmdName || '').toLowerCase());
   if (!cmd) return;
 
-  if (!config.publicMode && !isOwner) return;
   if (!isOwner && config.rateLimit?.enabled && limited(sender)) return;
   if (cmd.ownerOnly && !isOwner) return;
   if (cmd.groupOnly && !isGroup) return ctx.reply('Group only command.');
@@ -395,18 +427,24 @@ async function handle(sock, m) {
   if (config.autoTyping) sock.sendPresenceUpdate('paused', jid).catch(() => {});
 }
 
-// Graceful shutdown: Render sends SIGTERM to the old instance on every deploy.
-// Close the socket and release the lock so the new instance can take over cleanly.
-function shutdown() {
+// Graceful shutdown: release the advisory lock explicitly, then exit.
+// Destroying the client (release(true)) also drops any lock Postgres still holds.
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log('Shutting down...');
   try { sock?.end(undefined); } catch {}
-  try { lockClient?.release(); } catch {}
+  if (lockClient) {
+    try { await lockClient.query('SELECT pg_advisory_unlock($1)', [LOCK_ID]); } catch {}
+    try { lockClient.release(true); } catch {}
+  }
   setTimeout(() => process.exit(0), 500);
 }
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-// Anti-crash: log instead of dying (use pm2 / the panel's auto-restart for hard crashes)
+// Anti-crash: log instead of dying (use the platform's auto-restart for hard crashes)
 process.on('uncaughtException', (e) => console.error('uncaught:', e.message));
 process.on('unhandledRejection', (e) => console.error('unhandled:', e?.message || e));
 
