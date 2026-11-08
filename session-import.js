@@ -10,6 +10,7 @@ const { pool } = require('./pg');
 // Fixed database key. SESSION_ID is the credential itself, so it must not be used as a key.
 const STORE_KEY = 'main';
 const SESSION_PREFIX = 'ADEZ-XMD~';
+const IMPORT_MARKER_PREFIX = 'import-marker:';
 
 function parseSessionId(raw) {
   if (!raw.startsWith(SESSION_PREFIX)) {
@@ -18,6 +19,10 @@ function parseSessionId(raw) {
   const creds = Buffer.from(raw.slice(SESSION_PREFIX.length), 'base64').toString('utf8');
   JSON.parse(creds); // throws if the payload is not valid JSON
   return creds;
+}
+
+function getImportMarkerId() {
+  return `${IMPORT_MARKER_PREFIX}${STORE_KEY}`;
 }
 
 async function importSession() {
@@ -34,8 +39,7 @@ async function importSession() {
 
   if (pool) {
     const credsId = `${STORE_KEY}:creds`;
-    // This id does not match '${STORE_KEY}:%', so clearSession() leaves it alone
-    const markerId = `import-marker:${STORE_KEY}`;
+    const markerId = getImportMarkerId();
     const hash = crypto.createHash('sha256').update(raw).digest('hex');
 
     const m = await pool.query('SELECT data FROM auth_state WHERE id = $1', [markerId]);
@@ -58,4 +62,4 @@ async function importSession() {
   }
 }
 
-module.exports = { importSession, STORE_KEY, SESSION_PREFIX };
+module.exports = { importSession, STORE_KEY, SESSION_PREFIX, getImportMarkerId, IMPORT_MARKER_PREFIX };
