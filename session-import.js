@@ -25,6 +25,12 @@ function getImportMarkerId() {
   return `${IMPORT_MARKER_PREFIX}${STORE_KEY}`;
 }
 
+async function clearImportMarker() {
+  if (pool) {
+    await pool.query('DELETE FROM auth_state WHERE id = $1', [getImportMarkerId()]);
+  }
+}
+
 async function importSession() {
   const raw = (process.env.SESSION_ID || '').trim();
   if (!raw) return;
@@ -62,4 +68,4 @@ async function importSession() {
   }
 }
 
-module.exports = { importSession, STORE_KEY, SESSION_PREFIX, getImportMarkerId, IMPORT_MARKER_PREFIX };
+module.exports = { importSession, clearImportMarker, STORE_KEY, SESSION_PREFIX, getImportMarkerId, IMPORT_MARKER_PREFIX };
