@@ -1,10 +1,10 @@
 const crypto = require('crypto');
 const dns = require('dns/promises');
 const net = require('net');
+const yts = require('yt-search');
 
-const card = (title, lines) =>
-  `╔═══ ${title} ═══\n${[].concat(lines).map((l) => `║ ◆ ${l}`).join('\n')}\n╚══════════════`;
-const fail = (msg) => card('⚠️ ERROR', msg);
+const card = (_title, lines) => [].concat(lines).join('\n');
+const fail = (msg) => msg;
 const MAX_MB = 40;
 const MAX_SONG_MB = 30;
 const MAX_APK_MB = 60;
@@ -173,13 +173,6 @@ const playCommand = {
       let page = '';
 
       if (!id) {
-        let yts;
-        try {
-          yts = require('yt-search');
-        } catch (e) {
-          await react(ctx, '❌');
-          return ctx.reply(fail('Search is not installed yet. Add yt-search to package.json.'));
-        }
         const res = await yts(query);
         const v = res.videos && res.videos[0];
         if (!v) {
@@ -219,6 +212,7 @@ const playCommand = {
           },
         });
       } catch (e) {
+        console.error('play contextInfo error:', e && e.message);
         await ctx.sock.sendMessage(ctx.jid, base);
       }
       await react(ctx, '✅');
@@ -244,7 +238,7 @@ function mediaCommand(name, kind, example) {
       if (!f.type.startsWith(kind + '/')) {
         return ctx.reply(fail(`That link is not a ${kind} file. Use .dl for other files.`));
       }
-      const caption = card(`📥 ${kind.toUpperCase()}`, ['Powered by ADEZ TECH']);
+      const caption = card('', ['Powered by ADEZ TECH']);
       if (kind === 'image') await ctx.sock.sendMessage(ctx.jid, { image: f.buf, caption });
       else if (kind === 'video') await ctx.sock.sendMessage(ctx.jid, { video: f.buf, mimetype: f.type, caption });
       else await ctx.sock.sendMessage(ctx.jid, { audio: f.buf, mimetype: f.type });
@@ -270,7 +264,9 @@ async function fbInfo(link) {
     const d = await getJsonSafe(`https://api.bk9.dev/download/fb?url=${encodeURIComponent(link)}`);
     const b = d && d.status && d.BK9;
     if (b && (b.hd || b.sd)) return { hd: b.hd || null, sd: b.sd || null, title: b.title || 'Facebook Video' };
-  } catch (e) {}
+  } catch (e) {
+    console.error('fbInfo bk9 failed:', e && e.message);
+  }
   for (const ep of ['fb', 'fb2']) {
     try {
       const d = await getJsonSafe(`https://apis.xcasper.space/api/downloader/${ep}?url=${encodeURIComponent(link)}`);
@@ -281,7 +277,9 @@ async function fbInfo(link) {
       const hd = d.hd || x.hd || null;
       const sd = d.sd || x.sd || d.url || x.url || first || null;
       if (hd || sd) return { hd, sd, title: d.title || x.title || 'Facebook Video' };
-    } catch (e) {}
+    } catch (e) {
+      console.error(`fbInfo xcasper ${ep} failed:`, e && e.message);
+    }
   }
   return null;
 }
@@ -298,7 +296,10 @@ module.exports = [
       if (!url) return ctx.reply(fail('Example: .dl https://example.com/file.pdf'));
       const f = await fetchFile(url.href);
       if (f.tooBig) return ctx.reply(fail(`That file is bigger than ${MAX_MB} MB.`));
-      const fileName = decodeURIComponent(url.pathname.split('/').pop() || '') || 'file';
+      let fileName = 'file';
+      try {
+        fileName = decodeURIComponent(url.pathname.split('/').pop() || '') || 'file';
+      } catch (e) {}
       await ctx.sock.sendMessage(ctx.jid, { document: f.buf, mimetype: f.type, fileName });
     }),
   },
@@ -327,7 +328,7 @@ module.exports = [
         if (f.tooBig) {
           await react(ctx, '❌');
           return ctx.reply(
-            card('📱 APK', [`${app.appname} is bigger than ${MAX_APK_MB} MB`, `Download : ${app.download_url}`])
+            card('', [`${app.appname} is bigger than ${MAX_APK_MB} MB`, `Download : ${app.download_url}`])
           );
         }
         const size = (f.buf.length / (1024 * 1024)).toFixed(1);
@@ -335,7 +336,7 @@ module.exports = [
           document: f.buf,
           fileName: `${String(app.appname).replace(/[^a-zA-Z0-9]/g, '_')}.apk`,
           mimetype: app.mimetype || 'application/vnd.android.package-archive',
-          caption: card('📱 APK', [
+          caption: card('', [
             `Name : ${app.appname}`,
             `Developer : ${app.developer || 'Unknown'}`,
             `Size : ${size} MB`,
@@ -378,13 +379,15 @@ module.exports = [
               file = f;
               break;
             }
-          } catch (e) {}
+          } catch (e) {
+            console.error('facebook candidate failed:', e && e.message);
+          }
         }
         if (!file) {
           await react(ctx, '❌');
           return ctx.reply(
             bigLink
-              ? card('📘 FACEBOOK', [`Video is bigger than ${MAX_VIDEO_MB} MB`, `Download : ${bigLink}`])
+              ? card('', [`Video is bigger than ${MAX_VIDEO_MB} MB`, `Download : ${bigLink}`])
               : fail('Download failed. Try again later.')
           );
         }
@@ -392,7 +395,7 @@ module.exports = [
         await ctx.sock.sendMessage(ctx.jid, {
           video: file.buf,
           mimetype: 'video/mp4',
-          caption: card('📘 FACEBOOK', [`Title : ${String(info.title).slice(0, 80)}`, `Size : ${size} MB`]),
+          caption: card('', [`Title : ${String(info.title).slice(0, 80)}`, `Size : ${size} MB`]),
         });
         await react(ctx, '✅');
       } catch (e) {
@@ -425,12 +428,12 @@ module.exports = [
         const f = await fetchFile(item.url, MAX_VIDEO_MB);
         if (f.tooBig) {
           await react(ctx, '❌');
-          return ctx.reply(card('📷 INSTAGRAM', [`Bigger than ${MAX_VIDEO_MB} MB`, `Download : ${item.url}`]));
+          return ctx.reply(card('', [`Bigger than ${MAX_VIDEO_MB} MB`, `Download : ${item.url}`]));
         }
         const size = (f.buf.length / (1024 * 1024)).toFixed(1);
         const lines = [`Type : ${isVideo ? 'Video' : 'Photo'}`, `Size : ${size} MB`];
         if (items.length > 1) lines.push(`Item : ${n} of ${items.length} (add a number after the link for others)`);
-        const caption = card('📷 INSTAGRAM', lines);
+        const caption = card('', lines);
         if (isVideo) await ctx.sock.sendMessage(ctx.jid, { video: f.buf, mimetype: 'video/mp4', caption });
         else await ctx.sock.sendMessage(ctx.jid, { image: f.buf, caption });
         await react(ctx, '✅');
@@ -450,28 +453,19 @@ module.exports = [
       if (!query) return ctx.reply(fail('Example: .yts Faded Alan Walker'));
       try {
         await react(ctx, '⏳');
-        let yts;
-        try {
-          yts = require('yt-search');
-        } catch (e) {
-          await react(ctx, '❌');
-          return ctx.reply(fail('Search is not installed yet. Add yt-search to package.json.'));
-        }
         const res = await yts(query);
         const items = (res.videos || []).slice(0, 8);
         if (!items.length) {
           await react(ctx, '❌');
           return ctx.reply(fail('No results. Try other words.'));
         }
-        const head = card('🔍 YOUTUBE SEARCH', [`Query : ${query}`, `Results : ${items.length}`]);
         const body = items
           .map(
             (v, i) =>
-              `*${i + 1}. ${v.title}*\n   ⏱ ${v.timestamp || 'n/a'} • ${(v.author && v.author.name) || 'Unknown'}\n   🔗 ${v.url}`
+              `${i + 1}. ${v.title}\n⏱ ${v.timestamp || 'n/a'} • ${(v.author && v.author.name) || 'Unknown'}\n🔗 ${v.url}`
           )
           .join('\n\n');
-        const foot = card('💡 TIP', ['Send .play <link> to get the song']);
-        await ctx.reply([head, body, foot].join('\n\n'));
+        await ctx.reply(`YouTube results for "${query}"\n\n${body}\n\nSend .play <link> to get the song`);
         await react(ctx, '✅');
       } catch (e) {
         console.error('yts error:', e && e.message);
@@ -575,12 +569,12 @@ module.exports = [
       if (p.license) lines.push(`License : ${typeof p.license === 'string' ? p.license : p.license.type}`);
       lines.push(`Link : https://www.npmjs.com/package/${p.name}`);
       const f = await fetchFile(p.dist.tarball);
-      if (f.tooBig) return ctx.reply(card('📦 NPM', [...lines, `File : bigger than ${MAX_MB} MB, not sent`]));
+      if (f.tooBig) return ctx.reply(card('', [...lines, `File : bigger than ${MAX_MB} MB, not sent`]));
       await ctx.sock.sendMessage(ctx.jid, {
         document: f.buf,
         mimetype: 'application/gzip',
         fileName: `${p.name.replace('/', '-').replace('@', '')}-${p.version}.tgz`,
-        caption: card('📦 NPM', lines),
+        caption: card('', lines),
       });
     }),
   },
