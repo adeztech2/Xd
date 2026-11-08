@@ -51,7 +51,7 @@ module.exports = [
     if (number.length < 7 || number.length > 15) return ctx.reply('Usage: .add <country-code-and-number>');
     const result = await ctx.sock.groupParticipantsUpdate(ctx.jid, [`${number}@s.whatsapp.net`], 'add');
     const status = result?.[0]?.status;
-    await ctx.reply(status && !['200', 200].includes(status) ? `Could not add that number (WhatsApp status ${status}). They may need to join using the invite link.` : `Add request sent for ${number}. WhatsApp may require them to accept an invitation.`);
+    await ctx.reply(status && !['200', 200].includes(status) ? `Could not add that number (WhatsApp status ${status}). They may need to join using the invite link.` : `Add request sent for ${number}.`);
   }) },
   { name: 'promote', desc: 'Promote a member to admin', groupOnly: true, adminOnly: true, run: memberAction('promote', 'Promoted') },
   { name: 'demote', desc: 'Demote an admin', groupOnly: true, adminOnly: true, run: memberAction('demote', 'Demoted') },
@@ -76,16 +76,15 @@ module.exports = [
     await ctx.reply(lines.join('\n'));
   }) },
   { name: 'link', alias: ['invitelink'], desc: 'Get group invite link', groupOnly: true, adminOnly: true, run: safe(async (ctx) => ctx.reply(`https://chat.whatsapp.com/${await ctx.sock.groupInviteCode(ctx.jid)}`)) },
-  { name: 'revoke', alias: ['resetlink'], desc: 'Revoke the current invite link', groupOnly: true, adminOnly: true, run: safe(async (ctx) => { await ctx.sock.groupRevokeInvite(ctx.jid); await ctx.reply('Invite link revoked. Use .link for the new link.'); }) },
-  { name: 'closegroup', alias: ['mute'], desc: 'Allow only admins to message', groupOnly: true, adminOnly: true, run: toggleGroupSetting('announcement', 'announcement', 'Group closed: only admins can send messages.') },
-  { name: 'opengroup', alias: ['unmute'], desc: 'Allow all members to message', groupOnly: true, adminOnly: true, run: toggleGroupSetting('announcement', 'not_announcement', 'Group opened: members can send messages.') },
-  { name: 'setname', desc: 'Change the group name', groupOnly: true, adminOnly: true, run: safe(async (ctx) => { if (!ctx.text) return ctx.reply('Usage: .setname <new name>'); await ctx.sock.groupUpdateSubject(ctx.jid, ctx.text.slice(0, 100)); await ctx.reply('Group name changed.'); }) },
-  { name: 'setdesc', desc: 'Change the group description', groupOnly: true, adminOnly: true, run: safe(async (ctx) => { if (!ctx.text) return ctx.reply('Usage: .setdesc <description>'); await ctx.sock.groupUpdateDescription(ctx.jid, ctx.text.slice(0, 2048)); await ctx.reply('Group description changed.'); }) },
+  { name: 'revoke', alias: ['resetlink'], desc: 'Revoke the current invite link', groupOnly: true, adminOnly: true, run: safe(async (ctx) => { await ctx.sock.groupRevokeInvite(ctx.jid); await ctx.reply('Group invite link revoked.'); }) },
+  { name: 'closegroup', alias: ['mute'], desc: 'Allow only admins to message', groupOnly: true, adminOnly: true, run: toggleGroupSetting('announcement', 'announcement', 'Group closed: only admins can message.') },
+  { name: 'opengroup', alias: ['unmute'], desc: 'Allow all members to message', groupOnly: true, adminOnly: true, run: toggleGroupSetting('announcement', 'not_announcement', 'Group opened: all members can message.') },
+  { name: 'setname', desc: 'Change the group name', groupOnly: true, adminOnly: true, run: safe(async (ctx) => { if (!ctx.text) return ctx.reply('Usage: .setname <new name>'); await ctx.sock.groupUpdateSubject(ctx.jid, ctx.text); await ctx.reply('Group name updated.'); }) },
+  { name: 'setdesc', desc: 'Change the group description', groupOnly: true, adminOnly: true, run: safe(async (ctx) => { if (!ctx.text) return ctx.reply('Usage: .setdesc <description>'); await ctx.sock.groupUpdateDescription(ctx.jid, ctx.text); await ctx.reply('Group description updated.'); }) },
   { name: 'events', desc: 'Enable/disable group event notices', groupOnly: true, adminOnly: true, run: safe(async (ctx) => {
     const value = (ctx.args[0] || '').toLowerCase();
     if (!['on', 'off'].includes(value)) return ctx.reply('Usage: .events on|off');
     await ctx.db.set(`group-events:${ctx.jid}`, value === 'on');
     await ctx.reply(`Group event notices turned ${value}.`);
   }) },
-  { name: 'admins', hidden: true, desc: 'List group admins', groupOnly: true, run: async (ctx) => ctx.reply(card('ADMINS', (await getMeta(ctx)).participants.filter((p) => p.admin).map((p) => p.id))) },
 ];
