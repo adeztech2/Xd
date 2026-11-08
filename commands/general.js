@@ -32,21 +32,25 @@ module.exports = [
     desc: 'Show commands',
     run: async ({ reply, list, prefix, config, sender, num }) => {
       const p = prefix || config.prefix[0];
-      const line = '▰▰▰▰▰▰▰▰▰▰▰▰▰▰';
       const g = groups(list);
 
       const top =
-        `『 ⚡ 𝗔𝗗𝗘𝗭 𝗫𝗠𝗗 ⚡ 』\n${line}\n\n` +
-        `» User : @${num(sender)}\n` +
-        `» Prefix : ${config.prefix.join(' ')}\n` +
-        `» Mode : ${config.publicMode ? 'Public' : 'Private'}\n` +
-        `» Uptime : ${uptime()}`;
+        `╔══════════════════╗\n` +
+        `║   ⚡ ${String(config.botName).toUpperCase()} ⚡   ║\n` +
+        `╚══════════════════╝\n\n` +
+        `👤 User    : @${num(sender)}\n` +
+        `🔰 Prefix  : ${config.prefix.join(' ')}\n` +
+        `🌍 Mode    : ${config.publicMode ? 'Public' : 'Private'}\n` +
+        `⏱️ Uptime  : ${uptime()}`;
 
       const sections = g.map(
-        (x) => `『 ${x.icon} ${x.name.toUpperCase()} 』\n${x.cmds.map((c) => ` ⌬ ${p}${c}`).join('\n')}`
+        (x) =>
+          `╔═══ ${x.icon} ${x.name.toUpperCase()} ═══\n` +
+          x.cmds.map((c) => `║ ◆ ${p}${c}`).join('\n') +
+          `\n╚══════════════`
       );
 
-      const bottom = `${line}\n ❖ 𝘗𝘰𝘸𝘦𝘳𝘦𝘥 𝘣𝘺 𝘈𝘋𝘌𝘡 𝘛𝘌𝘊𝘏`;
+      const bottom = `© ADEZ TECH • 2026`;
 
       await reply([top, ...sections, bottom].join('\n\n'), { mentions: [sender] });
     },
@@ -71,10 +75,11 @@ module.exports = [
     desc: 'Show the owner contact',
     run: async ({ reply, config }) => {
       await reply(
-        `『 👑 OWNER 』\n` +
-          ` ⌬ Bot : ${config.botName}\n` +
-          ` ⌬ Chat : https://wa.me/${OWNER_NUMBER}\n\n` +
-          ` ❖ 𝘗𝘰𝘸𝘦𝘳𝘦𝘥 𝘣𝘺 𝘈𝘋𝘌𝘡 𝘛𝘌𝘊𝘏`
+        `╔═══ 👑 OWNER ═══\n` +
+          `║ ◆ Bot  : ${config.botName}\n` +
+          `║ ◆ Chat : https://wa.me/${OWNER_NUMBER}\n` +
+          `╚══════════════\n\n` +
+          `© ADEZ TECH • 2026`
       );
     },
   },
