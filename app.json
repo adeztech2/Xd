@@ -4,9 +4,10 @@
   "logo": "https://u.pone.rs/tntebijt.jpeg",
   "keywords": ["whatsapp", "bot", "baileys", "adez", "xmd"],
   "env": {
-    "BOT_NAME": {
-      "description": "Name shown on the menu",
-      "value": "ADEZ XMD"
+    "SESSION_ID": {
+      "description": "Session ID from the Session ID Generator (step 1)",
+      "value": "",
+      "required": true
     },
     "PREFIX": {
       "description": "Command prefix",
@@ -14,7 +15,7 @@
     },
     "OWNER_NUMBER": {
       "description": "Owner WhatsApp number with country code, no + sign",
-      "value": ""
+      "value": "254111783552"
     },
     "NODE_VERSION": {
       "description": "Node version the bot runs on",
