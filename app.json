@@ -3,11 +3,16 @@
   "description": "ADEZ XMD is a WhatsApp bot with a terminal-style menu, group tools and fun commands.",
   "logo": "https://u.pone.rs/tntebijt.jpeg",
   "keywords": ["whatsapp", "bot", "baileys", "adez", "xmd"],
+  "buildpacks": [{ "url": "heroku/nodejs" }],
   "env": {
     "SESSION_ID": {
       "description": "Session ID from the Session ID Generator (step 1)",
       "value": "",
       "required": true
+    },
+    "BOT_NAME": {
+      "description": "Name shown on the menu",
+      "value": "ADEZ XMD"
     },
     "PREFIX": {
       "description": "Command prefix",
@@ -16,6 +21,19 @@
     "OWNER_NUMBER": {
       "description": "Owner WhatsApp number with country code, no + sign",
       "value": "254111783552"
+    },
+    "MODE": {
+      "description": "Who can use the bot: public or private",
+      "value": "public"
+    },
+    "TIMEZONE": {
+      "description": "Timezone for .time and .date, e.g. Africa/Nairobi",
+      "value": "Africa/Nairobi"
+    },
+    "MENU_IMAGE": {
+      "description": "Optional picture link for the menu (leave empty for none)",
+      "value": "",
+      "required": false
     },
     "NODE_VERSION": {
       "description": "Node version the bot runs on",
