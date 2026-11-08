@@ -3,38 +3,15 @@
   "description": "ADEZ XMD is a WhatsApp bot with a terminal-style menu, group tools and fun commands.",
   "keywords": ["whatsapp", "bot", "baileys", "adez", "xmd"],
   "buildpacks": [{ "url": "heroku/nodejs" }],
-  "formation": {
-    "worker": { "quantity": 1, "size": "basic" }
-  },
+  "formation": { "worker": { "quantity": 1, "size": "basic" } },
   "env": {
-    "SESSION_ID": {
-      "description": "Session ID from the pair page. It must start with ADEZ-XMD~. Keep it private: anyone with it can control the linked WhatsApp account.",
-      "required": true
-    },
-    "BOT_NAME": {
-      "description": "Name shown on the menu and in the startup alert",
-      "value": "ADEZ XMD",
-      "required": false
-    },
-    "PREFIX": {
-      "description": "Single command prefix (e.g. . or !). Leave empty to use the defaults . ! /",
-      "value": ".",
-      "required": false
-    },
-    "OWNER_NUMBER": {
-      "description": "Your WhatsApp number with country code, digits only, no + sign.",
-      "value": "",
-      "required": false
-    },
-    "MODE": {
-      "description": "Who can use bot commands: public or private",
-      "value": "public",
-      "required": false
-    },
-    "TIMEZONE": {
-      "description": "Timezone for the startup alert and time command, e.g. Africa/Nairobi",
-      "value": "Africa/Nairobi",
-      "required": false
-    }
+    "SESSION_ID": { "description": "Session ID from the pair page. Keep it private: anyone with it can control the linked WhatsApp account.", "required": true },
+    "OPENAI_API_KEY": { "description": "Optional API key for the .ai/.ask assistant commands.", "required": false },
+    "BOT_NAME": { "description": "Name shown by the bot", "value": "ADEZ XMD", "required": false },
+    "PREFIX": { "description": "Command prefix", "value": ".", "required": false },
+    "OWNER_NUMBER": { "description": "Your WhatsApp number with country code, digits only, no + sign.", "value": "", "required": false },
+    "MODE": { "description": "Who can use bot commands: public or private", "value": "public", "required": false },
+    "TIMEZONE": { "description": "Timezone for time display, e.g. Africa/Nairobi", "value": "Africa/Nairobi", "required": false },
+    "AUTO_REACT": { "description": "React to incoming messages (true or false)", "value": "true", "required": false }
   }
 }
