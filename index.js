@@ -1,3 +1,14 @@
+// Silence libsignal's per-message session dumps. They print key material to the logs.
+// Must run before @whiskeysockets/baileys is required.
+const SILENCED = ['Closing session', 'Opening session', 'Decrypted message with closed session'];
+for (const method of ['log', 'info', 'warn']) {
+  const original = console[method].bind(console);
+  console[method] = (...args) => {
+    if (typeof args[0] === 'string' && SILENCED.some((p) => args[0].startsWith(p))) return;
+    original(...args);
+  };
+}
+
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -17,6 +28,9 @@ const { pool, init } = require('./pg');
 const { usePgAuthState } = require('./auth-pg');
 // SESSION_ID must start with ADEZ-XMD~ (validated in session-import.js)
 const { importSession, STORE_KEY } = require('./session-import');
+
+const GROUP_LINK = 'https://chat.whatsapp.com/CvpcZcqPckCCIFT1QpQsqs';
+const CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb8N0xYLikgHxdGh790m';
 
 // ── Load commands (each file exports an array) ──
 const commands = new Map();
@@ -75,8 +89,9 @@ function detectHost() {
   return process.platform === 'linux' ? 'VPS / Linux' : 'Local';
 }
 
-// Startup message sent to the bot's own chat when it connects
+// Startup message text sent to the bot's own chat when it connects
 function buildStartupAlert(s) {
+  const LINE = '──────────────';
   const tz = config.startupAlert?.timezone || 'UTC';
   const time = new Date().toLocaleString('en-GB', {
     timeZone: tz,
@@ -85,17 +100,19 @@ function buildStartupAlert(s) {
   });
   const { version } = require('./package.json');
   const prefix = (config.prefix || ['.'])[0];
+  const mode = config.publicMode ? 'Public' : 'Private';
 
   return [
-    `✨ *${config.botName}* is online`,
-    '',
-    `📱 Number: ${num(s.user.id)}`,
-    `🕒 Time: ${time}`,
-    `🌍 Host: ${detectHost()}`,
-    `⚙️ Mode: ${config.publicMode ? 'Public' : 'Private'}`,
-    `⌨️ Prefix: ${prefix}`,
-    `🧩 Version: v${version}`,
-    `🟢 Node: ${process.version}`,
+    `┌──「 *✨ ${config.botName}* 」`,
+    `│ 🟢 Status   Online`,
+    `│ 📱 Number   ${num(s.user.id)}`,
+    `│ 🕒 Time     ${time}`,
+    `│ 🌍 Host     ${detectHost()}`,
+    `│ ⚙️ Mode     ${mode}`,
+    `│ ⌨️ Prefix   ${prefix}`,
+    `│ 🧩 Version  v${version}`,
+    `│ 🟢 Node     ${process.version}`,
+    `└${LINE}`,
     '',
     `Type ${prefix}menu to get started.`,
   ].join('\n');
@@ -204,7 +221,36 @@ async function start() {
 
         if (config.startupAlert?.enabled && !announced) {
           announced = true;
-          s.sendMessage(jidNormalizedUser(s.user.id), { text: buildStartupAlert(s) }).catch(() => {});
+          const jid = jidNormalizedUser(s.user.id);
+          const text = buildStartupAlert(s);
+          try {
+            await s.sendMessage(jid, {
+              text,
+              footer: `${config.botName} • ADEZ TECH`,
+              interactiveButtons: [
+                {
+                  name: 'cta_url',
+                  buttonParamsJson: JSON.stringify({
+                    display_text: '📢 Follow Channel',
+                    url: CHANNEL_LINK,
+                    merchant_url: CHANNEL_LINK,
+                  }),
+                },
+                {
+                  name: 'cta_url',
+                  buttonParamsJson: JSON.stringify({
+                    display_text: '👥 Join Group',
+                    url: GROUP_LINK,
+                    merchant_url: GROUP_LINK,
+                  }),
+                },
+              ],
+            });
+          } catch (e) {
+            console.error('startup alert buttons failed:', e.message);
+            // fall back to plain text with the links, so the alert is never lost
+            await s.sendMessage(jid, { text: `${text}\n\n📢 ${CHANNEL_LINK}\n👥 ${GROUP_LINK}` }).catch(() => {});
+          }
         }
       }
 
