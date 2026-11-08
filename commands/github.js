@@ -94,7 +94,6 @@ module.exports = [
     run: safe(async (ctx) => {
       const name = (ctx.text || '').trim();
       if (!validRepo(name)) return ctx.reply(fail('Example: .gitzip adeztech2/adez-md'));
-      await ctx.reply(card('⏳ PLEASE WAIT', ['Preparing your zip...']));
       const f = await fetchFile(`https://api.github.com/repos/${name}/zipball`);
       if (f.tooBig) return ctx.reply(fail(`That repo is bigger than ${MAX_MB} MB.`));
       await ctx.sock.sendMessage(ctx.jid, {
@@ -118,7 +117,6 @@ module.exports = [
       if (!/^https?:$/.test(url.protocol) || isPrivateHost(url.hostname)) {
         return ctx.reply(fail('That link is not allowed.'));
       }
-      await ctx.reply(card('⏳ PLEASE WAIT', ['Downloading your file...']));
       const f = await fetchFile(url.href);
       if (f.tooBig) return ctx.reply(fail(`That file is bigger than ${MAX_MB} MB.`));
       const fileName = decodeURIComponent(url.pathname.split('/').pop() || '') || 'file';
