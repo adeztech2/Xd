@@ -1,21 +1,13 @@
+const OWNER_NUMBER = '254111783552'; // owner WhatsApp number, country code, no +
+
 // [name, emoji, commands]. Edit this list to rename or move commands.
 const CATEGORIES = [
   ['general', '🌐', ['menu', 'ping', 'uptime', 'owner']],
   ['group', '👥', ['kick', 'promote', 'demote', 'tagall']],
   ['tools', '🛠️', ['rank', 'vv']],
   ['settings', '⚙️', ['mode']],
+  ['fun', '🎉', ['alive', 'time', 'date', 'quote', 'fact', 'flip', 'dice', '8ball', 'joke']],
 ];
-
-const TITLES = {
-  general: 'MAINFRAME',
-  group: 'GROUP SECURITY',
-  tools: 'SYSTEM TOOLS',
-  settings: 'SETTINGS',
-  other: 'OTHER',
-};
-
-const block = (title, lines) =>
-  `┌─[ ${title} ]\n${lines.map((l) => `│ ${l}`).join('\n')}\n└───────────────────────`;
 
 function groups(list) {
   const names = list.filter((c) => !c.hidden).map((c) => c.name);
@@ -35,6 +27,31 @@ function uptime() {
 
 module.exports = [
   {
+    name: 'menu',
+    alias: ['help'],
+    desc: 'Show commands',
+    run: async ({ reply, list, prefix, config, sender, num }) => {
+      const p = prefix || config.prefix[0];
+      const line = '▰▰▰▰▰▰▰▰▰▰▰▰▰▰';
+      const g = groups(list);
+
+      const top =
+        `『 ⚡ 𝗔𝗗𝗘𝗭 𝗫𝗠𝗗 ⚡ 』\n${line}\n\n` +
+        `» User : @${num(sender)}\n` +
+        `» Prefix : ${config.prefix.join(' ')}\n` +
+        `» Mode : ${config.publicMode ? 'Public' : 'Private'}\n` +
+        `» Uptime : ${uptime()}`;
+
+      const sections = g.map(
+        (x) => `『 ${x.icon} ${x.name.toUpperCase()} 』\n${x.cmds.map((c) => ` ⌬ ${p}${c}`).join('\n')}`
+      );
+
+      const bottom = `${line}\n ❖ 𝘗𝘰𝘸𝘦𝘳𝘦𝘥 𝘣𝘺 𝘈𝘋𝘌𝘡 𝘛𝘌𝘊𝘏`;
+
+      await reply([top, ...sections, bottom].join('\n\n'), { mentions: [sender] });
+    },
+  },
+  {
     name: 'ping',
     desc: 'Check bot speed',
     run: async ({ reply, m, config }) => {
@@ -43,50 +60,22 @@ module.exports = [
     },
   },
   {
-    name: 'menu',
-    alias: ['help'],
-    desc: 'Show commands',
-    run: async ({ reply, list, prefix, config, sender, num }) => {
-      const p = prefix || config.prefix[0];
-      const bot = String(config.botName).toUpperCase();
-      const g = groups(list);
-
-      const header =
-        `▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n` +
-        `█ ${bot} // TERMINAL █\n` +
-        `▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n\n` +
-        `[✓] CONNECTION ESTABLISHED\n` +
-        `[✓] SECURITY PROTOCOL ACTIVE\n` +
-        `[✓] BOT ENGINE INITIALIZED`;
-
-      const identity = block('IDENTITY', [
-        `USER   : @${num(sender)}`,
-        `BOT    : ${bot}`,
-        `PREFIX : ${config.prefix.join(' ')}`,
-        `ACCESS : ${config.publicMode ? 'PUBLIC' : 'PRIVATE'}`,
-        `UPTIME : ${uptime()}`,
-      ]);
-
-      const sections = g.map((x, i) =>
-        block(`${String(i + 1).padStart(2, '0')} / ${TITLES[x.name] || x.name.toUpperCase()}`, x.cmds.map((c) => p + c))
-      );
-
-      const dev = block('DEVELOPER INFORMATION', [
-        `ORGANIZATION : ADEZ TECH`,
-        `SYSTEM       : ${bot}`,
-        `YEAR         : 2026`,
-      ]);
-
-      const footer = `> ROOT ACCESS GRANTED\n> WAITING FOR NEXT COMMAND..._\n[ ${bot} • SYSTEM ONLINE ]`;
-
-      await reply([header, identity, ...sections, dev, footer].join('\n\n'), { mentions: [sender] });
-    },
-  },
-  {
     name: 'uptime',
     desc: 'Bot uptime',
     run: async ({ reply, config }) => {
       await reply(`*${config.botName}* ⏱ Uptime: ${uptime()}`);
+    },
+  },
+  {
+    name: 'owner',
+    desc: 'Show the owner contact',
+    run: async ({ reply, config }) => {
+      await reply(
+        `『 👑 OWNER 』\n` +
+          ` ⌬ Bot : ${config.botName}\n` +
+          ` ⌬ Chat : https://wa.me/${OWNER_NUMBER}\n\n` +
+          ` ❖ 𝘗𝘰𝘸𝘦𝘳𝘦𝘥 𝘣𝘺 𝘈𝘋𝘌𝘡 𝘛𝘌𝘊𝘏`
+      );
     },
   },
 ];
