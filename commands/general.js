@@ -6,10 +6,17 @@ const CATEGORIES = [
   ['settings', '⚙️', ['mode']],
 ];
 
-const box = (title, lines) =>
-  `┌────✧ ${title} ✧────\n${lines.map((l) => `│✧ ${l}`).join('\n')}\n└──────────────────`;
+const TITLES = {
+  general: 'MAINFRAME',
+  group: 'GROUP SECURITY',
+  tools: 'SYSTEM TOOLS',
+  settings: 'SETTINGS',
+  other: 'OTHER',
+};
 
-// Existing commands per category; anything not listed above goes under "other"
+const block = (title, lines) =>
+  `┌─[ ${title} ]\n${lines.map((l) => `│ ${l}`).join('\n')}\n└───────────────────────`;
+
 function groups(list) {
   const names = list.filter((c) => !c.hidden).map((c) => c.name);
   const known = new Set(CATEGORIES.flatMap(([, , n]) => n));
@@ -41,18 +48,38 @@ module.exports = [
     desc: 'Show commands',
     run: async ({ reply, list, prefix, config, sender, num }) => {
       const p = prefix || config.prefix[0];
+      const bot = String(config.botName).toUpperCase();
       const g = groups(list);
-      const total = g.reduce((n, x) => n + x.cmds.length, 0);
 
-      const info = box(config.botName, [
-        `Prefix: [ ${config.prefix.join(' ')} ]`,
-        `Mode: ${config.publicMode ? 'public' : 'private'}`,
-        `Uptime: ${uptime()}`,
-        `Total commands: ${total}`,
+      const header =
+        `▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n` +
+        `█ ${bot} // TERMINAL █\n` +
+        `▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n\n` +
+        `[✓] CONNECTION ESTABLISHED\n` +
+        `[✓] SECURITY PROTOCOL ACTIVE\n` +
+        `[✓] BOT ENGINE INITIALIZED`;
+
+      const identity = block('IDENTITY', [
+        `USER   : @${num(sender)}`,
+        `BOT    : ${bot}`,
+        `PREFIX : ${config.prefix.join(' ')}`,
+        `ACCESS : ${config.publicMode ? 'PUBLIC' : 'PRIVATE'}`,
+        `UPTIME : ${uptime()}`,
       ]);
-      const sections = g.map((x) => box(`${x.icon} ${x.name.toUpperCase()}`, x.cmds.map((c) => p + c)));
 
-      await reply(`Hey, @${num(sender)} 👋\n\n${info}\n\n${sections.join('\n\n')}`, { mentions: [sender] });
+      const sections = g.map((x, i) =>
+        block(`${String(i + 1).padStart(2, '0')} / ${TITLES[x.name] || x.name.toUpperCase()}`, x.cmds.map((c) => p + c))
+      );
+
+      const dev = block('DEVELOPER INFORMATION', [
+        `ORGANIZATION : ADEZ TECH`,
+        `SYSTEM       : ${bot}`,
+        `YEAR         : 2026`,
+      ]);
+
+      const footer = `> ROOT ACCESS GRANTED\n> WAITING FOR NEXT COMMAND..._\n[ ${bot} • SYSTEM ONLINE ]`;
+
+      await reply([header, identity, ...sections, dev, footer].join('\n\n'), { mentions: [sender] });
     },
   },
   {
