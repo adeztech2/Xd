@@ -1,31 +1,31 @@
-const OWNER_NUMBER = '254111783552'; // owner WhatsApp number, country code, no +
+const LINE = '──────────────';
 
-// [name, emoji, commands]. Edit this list to rename or move commands.
+// [title, emoji, commands]. Edit this list to rename or move commands.
+// Each command should appear in one category only.
 const CATEGORIES = [
-  ['general', '🌐', ['menu', 'ping', 'uptime', 'owner']],
-  ['group', '👥', ['kick', 'promote', 'demote', 'tagall', 'hidetag', 'admins', 'groupinfo', 'link', 'revoke', 'opengroup', 'closegroup', 'setname', 'setdesc']],
-  ['tools', '🛠️', ['rank', 'vv', 'calc', 'reverse', 'say', 'shorturl', 'weather', 'translate', 'qr']],
-  ['download', '📥', ['dl', 'dlimage', 'dlvideo', 'dlaudio', 'gitzip', 'gitfile', 'npm']],
-  ['github', '🐙', ['github', 'repo', 'repos']],
-  ['settings', '⚙️', ['mode', 'settings', 'setprefix', 'setbotname', 'antilink', 'welcome']],
-  ['fun', '🎉', ['alive', 'time', 'date', 'quote', 'fact', 'flip', 'dice', '8ball', 'joke']],
-  ['download', '📥', ['play', 'yts', 'apk', 'facebook', 'instagram', 'tgsticker', 'dl', 'dlimage', 'dlvideo', 'dlaudio', 'gitzip', 'gitfile', 'npm']],
+  ['General', '🌐', ['menu', 'ping', 'uptime', 'owner']],
+  ['Group', '👥', ['kick', 'promote', 'demote', 'tagall', 'hidetag', 'admins', 'groupinfo', 'link', 'revoke', 'opengroup', 'closegroup', 'setname', 'setdesc']],
+  ['Tools', '🛠️', ['rank', 'vv', 'calc', 'reverse', 'say', 'shorturl', 'weather', 'translate', 'qr']],
+  ['Download', '📥', ['play', 'yts', 'dl', 'dlimage', 'dlvideo', 'dlaudio', 'apk', 'facebook', 'instagram', 'tgsticker', 'gitzip', 'gitfile', 'npm']],
+  ['GitHub', '🐙', ['github', 'repo', 'repos']],
+  ['Settings', '⚙️', ['mode', 'settings', 'setprefix', 'setbotname', 'antilink', 'welcome']],
+  ['Fun', '🎉', ['alive', 'time', 'date', 'quote', 'fact', 'flip', 'dice', '8ball', 'joke']],
 ];
 
 function groups(list) {
   const names = list.filter((c) => !c.hidden).map((c) => c.name);
-  const known = new Set(CATEGORIES.flatMap(([, , n]) => n));
+  const known = new Set(CATEGORIES.flatMap(([, , cmds]) => cmds));
   const g = CATEGORIES
-    .map(([name, icon, cmds]) => ({ name, icon, cmds: cmds.filter((n) => names.includes(n)) }))
+    .map(([title, icon, cmds]) => ({ title, icon, cmds: cmds.filter((n) => names.includes(n)) }))
     .filter((x) => x.cmds.length);
   const other = names.filter((n) => !known.has(n));
-  if (other.length) g.push({ name: 'other', icon: '➕', cmds: other });
+  if (other.length) g.push({ title: 'Other', icon: '➕', cmds: other });
   return g;
 }
 
 function uptime() {
   const s = Math.floor(process.uptime());
-  return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h ${Math.floor((s % 3600) / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
 
 module.exports = [
@@ -35,55 +35,52 @@ module.exports = [
     desc: 'Show commands',
     run: async ({ reply, list, prefix, config, sender, num }) => {
       const p = prefix || config.prefix[0];
-      const g = groups(list);
+      const groupList = groups(list);
+      const total = groupList.reduce((n, x) => n + x.cmds.length, 0);
 
-      const top =
-        `╔══════════════════╗\n` +
-        `║   ⚡ ${String(config.botName).toUpperCase()} ⚡   ║\n` +
-        `╚══════════════════╝\n\n` +
-        `👤 User    : @${num(sender)}\n` +
-        `🔰 Prefix  : ${config.prefix.join(' ')}\n` +
-        `🌍 Mode    : ${config.publicMode ? 'Public' : 'Private'}\n` +
-        `⏱️ Uptime  : ${uptime()}`;
+      const header = [
+        `┌──「 *⚡ ${config.botName}* 」`,
+        `│ 👤 @${num(sender)}`,
+        `│ 🌍 ${config.publicMode ? 'Public' : 'Private'} · ⏱ ${uptime()}`,
+        `│ 📚 ${total} commands · Prefix ${config.prefix.join(' ')}`,
+        `└${LINE}`,
+      ].join('\n');
 
-      const sections = g.map(
-        (x) =>
-          `╔═══ ${x.icon} ${x.name.toUpperCase()} ═══\n` +
-          x.cmds.map((c) => `║ ◆ ${p}${c}`).join('\n') +
-          `\n╚══════════════`
+      const sections = groupList.map((x) =>
+        [
+          `┌──「 ${x.icon} *${x.title}* (${x.cmds.length}) 」`,
+          ...x.cmds.map((c) => `│ ◦➛ ${p}${c}`),
+          `└${LINE}`,
+        ].join('\n')
       );
 
-      const bottom = `© ADEZ TECH • 2026`;
+      const footer = `_Use ${p}<command> to run a command._\n© ADEZ TECH • 2026\n👨‍💻 Dev: Arnold Adez`;
 
-      await reply([top, ...sections, bottom].join('\n\n'), { mentions: [sender] });
+      await reply([header, ...sections, footer].join('\n\n'), { mentions: [sender] });
     },
   },
   {
     name: 'ping',
     desc: 'Check bot speed',
     run: async ({ reply, m, config }) => {
-      const t = Date.now() - (Number(m.messageTimestamp) * 1000 || Date.now());
-      await reply(`*${config.botName}* ⚡ Speed ! ${Math.abs(t)}ms`);
+      const sent = Number(m.messageTimestamp) * 1000;
+      const ms = sent ? Math.abs(Date.now() - sent) : 0;
+      await reply(`⚡ *${config.botName}*\n🏓 Latency: ${ms} ms`);
     },
   },
   {
     name: 'uptime',
     desc: 'Bot uptime',
     run: async ({ reply, config }) => {
-      await reply(`*${config.botName}* ⏱ Uptime: ${uptime()}`);
+      await reply(`⚡ *${config.botName}*\n⏱️ Uptime: ${uptime()}`);
     },
   },
   {
     name: 'owner',
     desc: 'Show the owner contact',
     run: async ({ reply, config }) => {
-      await reply(
-        `╔═══ 👑 OWNER ═══\n` +
-          `║ ◆ Bot  : ${config.botName}\n` +
-          `║ ◆ Chat : https://wa.me/${OWNER_NUMBER}\n` +
-          `╚══════════════\n\n` +
-          `© ADEZ TECH • 2026`
-      );
+      const link = config.owner ? `https://wa.me/${config.owner}` : 'Not set (add OWNER_NUMBER)';
+      await reply(`👑 *Owner*\n${LINE}\n🤖 ${config.botName}\n💬 ${link}\n👨‍💻 Dev: Arnold Adez\n\n© ADEZ TECH • 2026`);
     },
   },
 ];
