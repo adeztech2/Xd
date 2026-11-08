@@ -11,14 +11,9 @@ module.exports = {
   publicMode: (process.env.MODE || 'private').toLowerCase() === 'public',
   sessionDir: './session',
 
-  // Brand styling for all bot replies. This mimics a WhatsApp business/status card look.
+  // Brand styling for all bot replies. Disabled to keep plain WhatsApp messages.
   replyStyle: {
-    enabled: true,
-    title: 'WhatsApp Business',
-    subtitle: 'Status',
-    contactLabel: 'Contact',
-    contactValue: process.env.BOT_CONTACT || 'Arnold Adez',
-    divider: '━━━━━━━━━━━━━━',
+    enabled: false,
   },
 
   autoRead: true,
