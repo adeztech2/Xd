@@ -22,17 +22,17 @@
       "required": false
     },
     "OWNER_NUMBER": {
-      "description": "Owner WhatsApp number with country code, no + sign. Owner commands stay disabled until this is set.",
+      "description": "Your WhatsApp number with country code, digits only, no + sign.",
       "value": "",
       "required": false
     },
     "MODE": {
-      "description": "Who can use the bot: public or private",
-      "value": "private",
+      "description": "Who can use bot commands: public or private",
+      "value": "public",
       "required": false
     },
     "TIMEZONE": {
-      "description": "Timezone for the startup alert, e.g. Africa/Nairobi",
+      "description": "Timezone for the startup alert and time command, e.g. Africa/Nairobi",
       "value": "Africa/Nairobi",
       "required": false
     }

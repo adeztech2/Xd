@@ -9,36 +9,39 @@ module.exports = {
   prefix: prefixEnv ? [prefixEnv] : ['.', '!', '/'],
   owner,                                   // country code + number, no +
   pairNumber: (process.env.PAIR_NUMBER || owner).replace(/\D/g, ''),
-  publicMode: (process.env.MODE || 'private').toLowerCase() === 'public',
+  // Public by default so commands work for incoming messages on a fresh deploy.
+  // Set MODE=private to restrict command access to the owner.
+  publicMode: (process.env.MODE || 'public').toLowerCase() === 'public',
   sessionDir: './session',
 
-  // ── Auto features ──
+  // Auto features
   autoRead: true,
   autoTyping: true,
   autoStatusView: true,
   autoStatusReact: { enabled: true, emoji: '💚' },
 
-  // ── Anti suite ──
+  // Moderation
   antiCall: true,
-  antiDelete: true,                        // forwards deleted messages to the owner
-  antiLink: { enabled: true, action: 'kick', whitelist: ['youtube.com', 'youtu.be'] }, // action: delete | warn | kick
-  antiBadword: { enabled: true, action: 'delete', words: ['spam'] },                   // action: delete | warn
+  antiDelete: true,
+  antiLink: { enabled: true, action: 'kick', whitelist: ['youtube.com', 'youtu.be'] },
+  antiBadword: { enabled: true, action: 'delete', words: ['spam'] },
 
-  // ── Group messages (@user is replaced with the member) ──
+  // Group messages (@user is replaced with the member)
   welcome: true,
   welcomeMessage: 'Welcome @user 👋\nType .menu for commands',
   leaveMessage: 'Goodbye @user',
 
-  // ── Levels ──
+  // Levels
   levelSystem: { enabled: true, xpPerMsg: 5, cooldown: 60000 },
 
-  // ── Startup alert (sent to the bot's own chat when it comes online) ──
+  // Startup alert
   startupAlert: {
     enabled: true,
     timezone: process.env.TIMEZONE || 'Africa/Nairobi',
   },
 
-  // ── Anti-ban / limits ──
-  sendDelay: [800, 2500],                  // random delay (ms) before every outgoing message
-  rateLimit: { enabled: true, window: 60000, maxRequests: 30 }, // commands per user (owner exempt)
+  // Conservative pacing and per-user command limits. No setting can guarantee that
+  // WhatsApp will never restrict an account; avoid bulk or unsolicited messaging.
+  sendDelay: [800, 2500],
+  rateLimit: { enabled: true, window: 60000, maxRequests: 30 },
 };
