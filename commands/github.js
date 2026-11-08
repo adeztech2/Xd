@@ -1,6 +1,4 @@
-const card = (title, lines) =>
-  `╔═══ ${title} ═══\n${[].concat(lines).map((l) => `║ ◆ ${l}`).join('\n')}\n╚══════════════`;
-const fail = (msg) => card('⚠️ ERROR', msg);
+const fail = (msg) => msg;
 const MAX_MB = 40;
 
 const safe = (fn) => async (ctx) => {
@@ -47,15 +45,15 @@ module.exports = [
       if (!/^[\w-]+$/.test(name)) return ctx.reply(fail('Example: .github torvalds'));
       const u = await getJson(`https://api.github.com/users/${name}`);
       const lines = [
-        `Name : ${u.name || u.login}`,
-        `Username : ${u.login}`,
-        `Repos : ${u.public_repos}`,
-        `Followers : ${u.followers}`,
-        `Following : ${u.following}`,
+        `Name: ${u.name || u.login}`,
+        `Username: ${u.login}`,
+        `Repos: ${u.public_repos}`,
+        `Followers: ${u.followers}`,
+        `Following: ${u.following}`,
       ];
-      if (u.bio) lines.push(`Bio : ${u.bio}`);
-      lines.push(`Link : ${u.html_url}`);
-      await ctx.reply(card('🐙 GITHUB', lines));
+      if (u.bio) lines.push(`Bio: ${u.bio}`);
+      lines.push(`Link: ${u.html_url}`);
+      await ctx.reply(lines.join('\n'));
     }),
   },
   {
@@ -66,15 +64,15 @@ module.exports = [
       if (!validRepo(name)) return ctx.reply(fail('Example: .repo adeztech2/adez-md'));
       const r = await getJson(`https://api.github.com/repos/${name}`);
       const lines = [
-        `Name : ${r.full_name}`,
-        `Stars : ${r.stargazers_count}`,
-        `Forks : ${r.forks_count}`,
-        `Language : ${r.language || 'n/a'}`,
-        `Updated : ${new Date(r.pushed_at).toDateString()}`,
+        `Name: ${r.full_name}`,
+        `Stars: ${r.stargazers_count}`,
+        `Forks: ${r.forks_count}`,
+        `Language: ${r.language || 'n/a'}`,
+        `Updated: ${new Date(r.pushed_at).toDateString()}`,
       ];
-      if (r.description) lines.push(`About : ${r.description}`);
-      lines.push(`Link : ${r.html_url}`);
-      await ctx.reply(card('📦 REPO', lines));
+      if (r.description) lines.push(`About: ${r.description}`);
+      lines.push(`Link: ${r.html_url}`);
+      await ctx.reply(lines.join('\n'));
     }),
   },
   {
@@ -84,8 +82,8 @@ module.exports = [
       const name = (ctx.text || '').trim().replace(/^@/, '');
       if (!/^[\w-]+$/.test(name)) return ctx.reply(fail('Example: .repos torvalds'));
       const list = await getJson(`https://api.github.com/users/${name}/repos?sort=updated&per_page=5`);
-      if (!list.length) return ctx.reply(card('📚 REPOS', ['No public repos.']));
-      await ctx.reply(card(`📚 REPOS OF ${name.toUpperCase()}`, list.map((r) => `${r.name} ⭐${r.stargazers_count}`)));
+      if (!list.length) return ctx.reply('No public repos.');
+      await ctx.reply(list.map((r) => `${r.name} ⭐${r.stargazers_count}`).join('\n'));
     }),
   },
   {
