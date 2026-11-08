@@ -197,7 +197,7 @@ async function start() {
       version,
       logger: pino({ level: 'silent' }),
       auth: state,
-      browser: Browsers.ubuntu('Chrome'),
+      browser: Browsers.macOS('Safari'),
       markOnlineOnConnect: false,
       syncFullHistory: false,
       generateHighQualityLinkPreview: false,
