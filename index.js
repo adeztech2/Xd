@@ -15,6 +15,7 @@ const config = require('./config');
 const db = require('./db');
 const { pool, init } = require('./pg');
 const { usePgAuthState } = require('./auth-pg');
+// SESSION_ID must start with ADEZ-XMD~ (validated in session-import.js)
 const { importSession, STORE_KEY } = require('./session-import');
 
 // ── Load commands (each file exports an array) ──
