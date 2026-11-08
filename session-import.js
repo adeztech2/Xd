@@ -1,4 +1,4 @@
-// Loads SESSION_ID (base64 of creds.json from the pair page) ONCE per distinct value.
+// Loads SESSION_ID (format: ADEZ-XMD~<base64 of creds.json>) ONCE per distinct value.
 // Never overwrites an existing session, and never re-imports the same SESSION_ID after a
 // logout has cleared it (otherwise a dead login would be re-imported and rejected forever).
 const crypto = require('crypto');
@@ -9,6 +9,16 @@ const { pool } = require('./pg');
 
 // Fixed database key. SESSION_ID is the credential itself, so it must not be used as a key.
 const STORE_KEY = 'main';
+const SESSION_PREFIX = 'ADEZ-XMD~';
+
+function parseSessionId(raw) {
+  if (!raw.startsWith(SESSION_PREFIX)) {
+    throw new Error(`SESSION_ID must start with ${SESSION_PREFIX}`);
+  }
+  const creds = Buffer.from(raw.slice(SESSION_PREFIX.length), 'base64').toString('utf8');
+  JSON.parse(creds); // throws if the payload is not valid JSON
+  return creds;
+}
 
 async function importSession() {
   const raw = (process.env.SESSION_ID || '').trim();
@@ -16,10 +26,9 @@ async function importSession() {
 
   let creds;
   try {
-    creds = Buffer.from(raw, 'base64').toString('utf8');
-    JSON.parse(creds);
-  } catch {
-    console.error('SESSION_ID is not valid, ignoring it.');
+    creds = parseSessionId(raw);
+  } catch (e) {
+    console.error(`SESSION_ID is not valid (${e.message}), ignoring it.`);
     return;
   }
 
@@ -49,4 +58,4 @@ async function importSession() {
   }
 }
 
-module.exports = { importSession, STORE_KEY };
+module.exports = { importSession, STORE_KEY, SESSION_PREFIX };
