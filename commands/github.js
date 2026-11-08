@@ -11,7 +11,10 @@ const safe = (fn) => async (ctx) => {
 };
 
 async function getJson(url) {
-  const r = await fetch(url, { headers: { 'User-Agent': 'adez-xmd-bot', Accept: 'application/vnd.github+json' } });
+  const r = await fetch(url, {
+    headers: { 'User-Agent': 'adez-xmd-bot', Accept: 'application/vnd.github+json' },
+    signal: AbortSignal.timeout(15000),
+  });
   if (r.status === 404) {
     const e = new Error('not found');
     e.notFound = true;
@@ -22,7 +25,7 @@ async function getJson(url) {
 }
 
 async function fetchFile(url) {
-  const r = await fetch(url, { headers: { 'User-Agent': 'adez-xmd-bot' } });
+  const r = await fetch(url, { headers: { 'User-Agent': 'adez-xmd-bot' }, signal: AbortSignal.timeout(30000) });
   if (!r.ok) throw new Error('HTTP ' + r.status);
   const size = Number(r.headers.get('content-length') || 0);
   if (size > MAX_MB * 1024 * 1024) return { tooBig: true };
@@ -33,8 +36,9 @@ async function fetchFile(url) {
 
 const isPrivateHost = (h) =>
   /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1)/i.test(h);
-
 const validRepo = (s) => /^[\w.-]+\/[\w.-]+$/.test(s || '');
+const repoHelp = 'Example: .repo owner/name';
+const safeText = (value, max = 140) => String(value || '').replace(/[\r\n]+/g, ' ').slice(0, max);
 
 module.exports = [
   {
@@ -42,8 +46,8 @@ module.exports = [
     desc: 'GitHub profile info',
     run: safe(async (ctx) => {
       const name = (ctx.text || '').trim().replace(/^@/, '');
-      if (!/^[\w-]+$/.test(name)) return ctx.reply(fail('Example: .github torvalds'));
-      const u = await getJson(`https://api.github.com/users/${name}`);
+      if (!/^[\w-]+$/.test(name)) return ctx.reply('Example: .github torvalds');
+      const u = await getJson(`https://api.github.com/users/${encodeURIComponent(name)}`);
       const lines = [
         `Name: ${u.name || u.login}`,
         `Username: ${u.login}`,
@@ -51,7 +55,7 @@ module.exports = [
         `Followers: ${u.followers}`,
         `Following: ${u.following}`,
       ];
-      if (u.bio) lines.push(`Bio: ${u.bio}`);
+      if (u.bio) lines.push(`Bio: ${safeText(u.bio, 250)}`);
       lines.push(`Link: ${u.html_url}`);
       await ctx.reply(lines.join('\n'));
     }),
@@ -61,7 +65,7 @@ module.exports = [
     desc: 'GitHub repo info, e.g. .repo owner/name',
     run: safe(async (ctx) => {
       const name = (ctx.text || '').trim();
-      if (!validRepo(name)) return ctx.reply(fail('Example: .repo adeztech2/adez-md'));
+      if (!validRepo(name)) return ctx.reply(repoHelp);
       const r = await getJson(`https://api.github.com/repos/${name}`);
       const lines = [
         `Name: ${r.full_name}`,
@@ -70,7 +74,7 @@ module.exports = [
         `Language: ${r.language || 'n/a'}`,
         `Updated: ${new Date(r.pushed_at).toDateString()}`,
       ];
-      if (r.description) lines.push(`About: ${r.description}`);
+      if (r.description) lines.push(`About: ${safeText(r.description, 250)}`);
       lines.push(`Link: ${r.html_url}`);
       await ctx.reply(lines.join('\n'));
     }),
@@ -80,10 +84,61 @@ module.exports = [
     desc: 'Latest repos of a GitHub user',
     run: safe(async (ctx) => {
       const name = (ctx.text || '').trim().replace(/^@/, '');
-      if (!/^[\w-]+$/.test(name)) return ctx.reply(fail('Example: .repos torvalds'));
-      const list = await getJson(`https://api.github.com/users/${name}/repos?sort=updated&per_page=5`);
+      if (!/^[\w-]+$/.test(name)) return ctx.reply('Example: .repos torvalds');
+      const list = await getJson(`https://api.github.com/users/${encodeURIComponent(name)}/repos?sort=updated&per_page=5`);
       if (!list.length) return ctx.reply('No public repos.');
-      await ctx.reply(list.map((r) => `${r.name} ⭐${r.stargazers_count}`).join('\n'));
+      await ctx.reply(list.map((r) => `${r.name} ⭐${r.stargazers_count}\n${r.html_url}`).join('\n\n'));
+    }),
+  },
+  {
+    name: 'ghsearch',
+    desc: 'Search GitHub repositories',
+    run: safe(async (ctx) => {
+      const query = (ctx.text || '').trim();
+      if (!query) return ctx.reply('Example: .ghsearch node whatsapp bot');
+      const data = await getJson(`https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&sort=stars&order=desc&per_page=5`);
+      if (!data.items?.length) return ctx.reply('No repositories found.');
+      await ctx.reply(data.items.map((r) => `${r.full_name} ⭐${r.stargazers_count}\n${safeText(r.description || 'No description', 160)}\n${r.html_url}`).join('\n\n'));
+    }),
+  },
+  {
+    name: 'ghissues',
+    desc: 'Show open issues and pull requests in a repo',
+    run: safe(async (ctx) => {
+      const name = (ctx.text || '').trim();
+      if (!validRepo(name)) return ctx.reply(repoHelp);
+      const items = await getJson(`https://api.github.com/repos/${name}/issues?state=open&per_page=5`);
+      if (!items.length) return ctx.reply(`No open issues or pull requests in ${name}.`);
+      await ctx.reply(items.map((issue) => {
+        const kind = issue.pull_request ? 'PR' : 'Issue';
+        return `${kind} #${issue.number}: ${safeText(issue.title, 160)}\n${issue.html_url}`;
+      }).join('\n\n'));
+    }),
+  },
+  {
+    name: 'ghcommits',
+    desc: 'Show recent commits in a repo',
+    run: safe(async (ctx) => {
+      const name = (ctx.text || '').trim();
+      if (!validRepo(name)) return ctx.reply(repoHelp);
+      const commits = await getJson(`https://api.github.com/repos/${name}/commits?per_page=5`);
+      if (!commits.length) return ctx.reply(`No commits found in ${name}.`);
+      await ctx.reply(commits.map((c) => {
+        const sha = c.sha.slice(0, 7);
+        const message = safeText(c.commit?.message, 140);
+        const author = safeText(c.commit?.author?.name || c.author?.login || 'Unknown', 60);
+        return `${sha} ${message}\nBy: ${author}\n${c.html_url}`;
+      }).join('\n\n'));
+    }),
+  },
+  {
+    name: 'ghrelease',
+    desc: 'Show the latest release of a repo',
+    run: safe(async (ctx) => {
+      const name = (ctx.text || '').trim();
+      if (!validRepo(name)) return ctx.reply(repoHelp);
+      const release = await getJson(`https://api.github.com/repos/${name}/releases/latest`);
+      await ctx.reply(`Latest release: ${release.name || release.tag_name}\nTag: ${release.tag_name}\nPublished: ${release.published_at ? new Date(release.published_at).toDateString() : 'unknown'}\n${release.html_url}`);
     }),
   },
   {
@@ -91,9 +146,9 @@ module.exports = [
     desc: 'Download a GitHub repo as zip',
     run: safe(async (ctx) => {
       const name = (ctx.text || '').trim();
-      if (!validRepo(name)) return ctx.reply(fail('Example: .gitzip adeztech2/adez-md'));
+      if (!validRepo(name)) return ctx.reply('Example: .gitzip owner/name');
       const f = await fetchFile(`https://api.github.com/repos/${name}/zipball`);
-      if (f.tooBig) return ctx.reply(fail(`That repo is bigger than ${MAX_MB} MB.`));
+      if (f.tooBig) return ctx.reply(`That repo is bigger than ${MAX_MB} MB.`);
       await ctx.sock.sendMessage(ctx.jid, {
         document: f.buf,
         mimetype: 'application/zip',
@@ -110,14 +165,17 @@ module.exports = [
       try {
         url = new URL(link);
       } catch (e) {
-        return ctx.reply(fail('Example: .dl https://example.com/file.pdf'));
+        return ctx.reply('Example: .dl https://example.com/file.pdf');
       }
       if (!/^https?:$/.test(url.protocol) || isPrivateHost(url.hostname)) {
-        return ctx.reply(fail('That link is not allowed.'));
+        return ctx.reply('That link is not allowed.');
       }
       const f = await fetchFile(url.href);
-      if (f.tooBig) return ctx.reply(fail(`That file is bigger than ${MAX_MB} MB.`));
-      const fileName = decodeURIComponent(url.pathname.split('/').pop() || '') || 'file';
+      if (f.tooBig) return ctx.reply(`That file is bigger than ${MAX_MB} MB.`);
+      let fileName = 'file';
+      try {
+        fileName = decodeURIComponent(url.pathname.split('/').pop() || '') || 'file';
+      } catch {}
       await ctx.sock.sendMessage(ctx.jid, { document: f.buf, mimetype: f.type, fileName });
     }),
   },

@@ -1,13 +1,14 @@
 const LINE = '──────────────';
 
+// [category, command names]
 const CATEGORIES = [
-  ['General', ['menu', 'alive', 'ping', 'uptime', 'time', 'date', 'owner']],
-  ['Fun', ['joke', 'fact', 'flip', 'dice', '8ball']],
+  ['General', ['menu', 'alive', 'ping', 'uptime', 'owner']],
   ['Group', ['kick', 'promote', 'demote', 'tagall', 'hidetag', 'admins', 'groupinfo', 'link', 'revoke', 'opengroup', 'closegroup', 'setname', 'setdesc']],
   ['Tools', ['rank', 'vv', 'calc', 'reverse', 'say', 'shorturl', 'weather', 'translate', 'qr']],
   ['Download', ['play', 'yts', 'dl', 'dlimage', 'dlvideo', 'dlaudio', 'apk', 'facebook', 'instagram', 'tgsticker', 'gitzip', 'gitfile', 'npm']],
-  ['GitHub', ['github', 'repo', 'repos']],
+  ['GitHub', ['github', 'repo', 'repos', 'ghsearch', 'ghissues', 'ghcommits', 'ghrelease']],
   ['Settings', ['mode', 'settings', 'setprefix', 'setbotname', 'antilink', 'welcome']],
+  ['Fun', ['joke', 'fact', 'flip', 'dice', '8ball']],
 ];
 
 function commandNames(list) {
