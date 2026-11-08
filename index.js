@@ -137,7 +137,25 @@ let sock = null;
 let lockClient = null;
 let starting = false;
 let replaced = false;
+let reconnectTimer = null;
 const LOCK_ID = 727272;
+
+function clearReconnectTimer() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+function scheduleReconnect(reason, delayMs = 3000) {
+  if (replaced || starting) return;
+  if (reconnectTimer) return;
+  console.log(`${reason} Scheduling reconnect in ${delayMs}ms...`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    start();
+  }, delayMs);
+}
 
 async function acquireLock() {
   if (!pool || lockClient) return;
@@ -169,6 +187,7 @@ async function start() {
   if (replaced) return;
   starting = true;
   try {
+    clearReconnectTimer();
     if (sock) {
       try { sock.end(undefined); } catch {}
       sock = null;
@@ -212,6 +231,7 @@ async function start() {
       if (s !== sock) return;
 
       if (connection === 'open') {
+        clearReconnectTimer();
         console.log(`✅ ${config.botName} connected as ${mask(s.user.id)}`);
 
         if (config.startupAlert?.enabled && !announced) {
@@ -240,15 +260,16 @@ async function start() {
         if (code === DisconnectReason.loggedOut) {
           console.log('Logged out by WhatsApp (401). Clearing the saved session...');
           announced = false;
+          clearReconnectTimer();
           await clearSession().catch((e) => console.error('clear session failed:', e.message));
-          setTimeout(start, 3000);
+          scheduleReconnect('Session cleared: reconnecting', 3000);
         } else if (code === DisconnectReason.connectionReplaced) {
           console.error('Connection replaced by another instance (440). Reconnect disabled. Restart the worker to take the session back.');
           replaced = true;
+          clearReconnectTimer();
           sock = null;
         } else {
-          console.log(`Connection closed (${code}), reconnecting...`);
-          setTimeout(start, 3000);
+          scheduleReconnect(`Connection closed (${code})`, 3000);
         }
       }
     });
@@ -286,7 +307,7 @@ async function start() {
     });
   } catch (e) {
     console.error('start failed:', e.message);
-    setTimeout(start, 5000);
+    scheduleReconnect('Start failed', 5000);
   } finally {
     starting = false;
   }
@@ -442,6 +463,7 @@ async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log('Shutting down...');
+  clearReconnectTimer();
   try { sock?.end(undefined); } catch {}
   if (lockClient) {
     try { await lockClient.query('SELECT pg_advisory_unlock($1)', [LOCK_ID]); } catch {}
