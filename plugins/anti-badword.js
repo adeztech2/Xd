@@ -1,22 +1,13 @@
-// plugins/anti-badword.js — deletes messages containing blocked words
-const config = require('../config');
-const esc = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
+// Remove configured words in groups; reads live config so owner toggles apply immediately.
+const escapeRegex = (word) => String(word).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 module.exports = {
   name: 'anti-badword',
-  events: {
-    message: async (ctx) => {
-      const cfg = config.antiBadword;
-      if (!cfg?.enabled || !cfg.words?.length || !ctx.isGroup || ctx.isAdmin || ctx.isOwner) return;
-      if (!ctx.botIsAdmin) return;
-
-      const re = new RegExp(`\\b(?:${cfg.words.map(esc).join('|')})\\b`, 'i');
-      if (!re.test(ctx.body)) return;
-
-      await ctx.sock.sendMessage(ctx.jid, { delete: ctx.m.key }).catch(() => {});
-      if (cfg.action === 'warn') {
-        await ctx.reply(`⚠️ @${ctx.num(ctx.sender)} watch your language`, { mentions: [ctx.sender] });
-      }
-    },
-  },
+  events: { message: async (ctx) => {
+    const cfg = ctx.config.antiBadword;
+    if (!cfg?.enabled || !cfg.words?.length || !ctx.isGroup || ctx.isAdmin || ctx.isOwner || !ctx.botIsAdmin) return;
+    const expression = new RegExp(`(?:^|\\W)(?:${cfg.words.map(escapeRegex).join('|')})(?:$|\\W)`, 'i');
+    if (!expression.test(ctx.body || '')) return;
+    await ctx.sock.sendMessage(ctx.jid, { delete: ctx.m.key }).catch(() => {});
+    if (cfg.action === 'warn') await ctx.reply(`Please avoid that language, @${ctx.num(ctx.sender)}.`, { mentions: [ctx.sender] });
+  } },
 };
