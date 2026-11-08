@@ -3,7 +3,7 @@ const OWNER_NUMBER = '254111783552'; // owner WhatsApp number, country code, no 
 // [name, emoji, commands]. Edit this list to rename or move commands.
 const CATEGORIES = [
   ['general', '🌐', ['menu', 'ping', 'uptime', 'owner']],
-  ['group', '👥', ['kick', 'promote', 'demote', 'tagall']],
+  ['group', '👥', ['kick', 'promote', 'demote', 'tagall', 'hidetag', 'admins', 'groupinfo', 'link', 'revoke', 'opengroup', 'closegroup', 'setname', 'setdesc']],
   ['tools', '🛠️', ['rank', 'vv']],
   ['settings', '⚙️', ['mode']],
   ['fun', '🎉', ['alive', 'time', 'date', 'quote', 'fact', 'flip', 'dice', '8ball', 'joke']],
