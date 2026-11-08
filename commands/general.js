@@ -9,6 +9,7 @@ const CATEGORIES = [
   ['github', '🐙', ['github', 'repo', 'repos']],
   ['settings', '⚙️', ['mode', 'settings', 'setprefix', 'setbotname', 'antilink', 'welcome']],
   ['fun', '🎉', ['alive', 'time', 'date', 'quote', 'fact', 'flip', 'dice', '8ball', 'joke']],
+  ['download', '📥', ['play', 'yts', 'apk', 'facebook', 'instagram', 'tgsticker', 'dl', 'dlimage', 'dlvideo', 'dlaudio', 'gitzip', 'gitfile', 'npm']],
 ];
 
 function groups(list) {
