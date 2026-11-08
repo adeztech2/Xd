@@ -4,8 +4,10 @@ const OWNER_NUMBER = '254111783552'; // owner WhatsApp number, country code, no 
 const CATEGORIES = [
   ['general', '🌐', ['menu', 'ping', 'uptime', 'owner']],
   ['group', '👥', ['kick', 'promote', 'demote', 'tagall', 'hidetag', 'admins', 'groupinfo', 'link', 'revoke', 'opengroup', 'closegroup', 'setname', 'setdesc']],
-  ['tools', '🛠️', ['rank', 'vv']],
-  ['settings', '⚙️', ['mode']],
+  ['tools', '🛠️', ['rank', 'vv', 'calc', 'reverse', 'say', 'shorturl', 'weather', 'translate', 'qr']],
+  ['download', '📥', ['dl', 'dlimage', 'dlvideo', 'dlaudio', 'gitzip', 'gitfile', 'npm']],
+  ['github', '🐙', ['github', 'repo', 'repos']],
+  ['settings', '⚙️', ['mode', 'settings', 'setprefix', 'setbotname', 'antilink', 'welcome']],
   ['fun', '🎉', ['alive', 'time', 'date', 'quote', 'fact', 'flip', 'dice', '8ball', 'joke']],
 ];
 
