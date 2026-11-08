@@ -4,7 +4,7 @@
   "keywords": ["whatsapp", "bot", "baileys", "adez", "xmd"],
   "buildpacks": [{ "url": "heroku/nodejs" }],
   "formation": {
-    "worker": { "quantity": 1, "size": "basic" }
+    "web": { "quantity": 1, "size": "basic" }
   },
   "env": {
     "SESSION_ID": {
