@@ -1,11 +1,15 @@
-const owner = (process.env.OWNER_NUMBER || '254111783552').replace(/\D/g, '');
+// Empty string means "no owner set". Only messages sent from the linked account
+// (fromMe) get owner rights until OWNER_NUMBER is provided.
+const owner = (process.env.OWNER_NUMBER || '').replace(/\D/g, '');
+
+const prefixEnv = (process.env.PREFIX || '').trim();
 
 module.exports = {
-  botName: 'ADEZ XMD',
-  prefix: ['.', '!', '/'],
+  botName: process.env.BOT_NAME || 'ADEZ XMD',
+  prefix: prefixEnv ? [prefixEnv] : ['.', '!', '/'],
   owner,                                   // country code + number, no +
   pairNumber: (process.env.PAIR_NUMBER || owner).replace(/\D/g, ''),
-  publicMode: false,                       // false = only owner can use commands
+  publicMode: (process.env.MODE || 'private').toLowerCase() === 'public',
   sessionDir: './session',
 
   // ── Auto features ──
@@ -28,11 +32,10 @@ module.exports = {
   // ── Levels ──
   levelSystem: { enabled: true, xpPerMsg: 5, cooldown: 60000 },
 
-  // ── Startup alert (sent to the owner when the bot comes online) ──
+  // ── Startup alert (sent to the bot's own chat when it comes online) ──
   startupAlert: {
     enabled: true,
-    timezone: 'Africa/Nairobi',
-    message: '✅ *{bot}* is online\n🕒 {time}\n🖥 {host}',   // {bot} {time} {host}
+    timezone: process.env.TIMEZONE || 'Africa/Nairobi',
   },
 
   // ── Anti-ban / limits ──
