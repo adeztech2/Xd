@@ -27,10 +27,13 @@ const db = require('./db');
 const { pool, init } = require('./pg');
 const { usePgAuthState } = require('./auth-pg');
 // SESSION_ID must start with ADEZ-XMD~ (validated in session-import.js)
-const { importSession, STORE_KEY } = require('./session-import');
+const { importSession, markSessionRejected, STORE_KEY } = require('./session-import');
 
 const GROUP_LINK = 'https://chat.whatsapp.com/CvpcZcqPckCCIFT1QpQsqs';
 const CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb8N0xYLikgHxdGh790m';
+
+const GROUP_META_TTL = 60000;   // group metadata is refreshed after 60 seconds
+const MAX_BAD_SESSION_RETRIES = 3;
 
 // ── Load commands (each file exports an array) ──
 const commands = new Map();
@@ -131,10 +134,12 @@ if (process.env.PORT) {
 }
 
 // ── State shared across restarts of the socket ──
-let sock = null; // the ONE active socket
-let lockClient = null; // Postgres connection that holds the single-instance lock
+let sock = null;        // the ONE active socket
+let lockClient = null;  // Postgres connection that holds the single-instance lock
 let starting = false;
-let replaced = false; // set when another device/instance took over this session
+let replaced = false;   // set when another device/instance took over this session
+let halted = false;     // set when WhatsApp keeps rejecting the saved session (code 500)
+let badRetries = 0;     // code-500 retries since the last successful connection
 const LOCK_ID = 727272;
 
 // Only one instance may use the WhatsApp session at a time. During a deploy the new
@@ -156,8 +161,10 @@ async function acquireLock() {
   console.log('Instance lock acquired');
 }
 
-// Wipes the saved WhatsApp login (used only when WhatsApp says we were really logged out)
+// Wipes the saved WhatsApp login (used only when WhatsApp says we were really logged out).
+// The rejected SESSION_ID is recorded first, so it is not imported again on the next start.
 async function clearSession() {
+  await markSessionRejected().catch((e) => console.error('mark rejected failed:', e.message));
   if (pool) {
     await pool.query('DELETE FROM auth_state WHERE id LIKE $1', [`${STORE_KEY}:%`]);
   } else {
@@ -167,7 +174,7 @@ async function clearSession() {
 
 async function start() {
   if (starting) return; // never run two start() calls at once
-  if (replaced) return; // another instance owns this session now; do not fight it
+  if (replaced || halted) return; // another instance owns this session, or WhatsApp rejected it
   starting = true;
   try {
     // End the previous socket so it can't keep reconnecting or fighting with the new one
@@ -204,8 +211,11 @@ async function start() {
       // lets WhatsApp re-request messages the other side could not decrypt
       getMessage: async (key) => sentCache.get(key.id) || cache.get(key.id)?.message || undefined,
       msgRetryCounterCache: retryCache,
-      // faster group sends (no metadata fetch each time)
-      cachedGroupMetadata: async (jid) => metaCache.get(jid)?.meta,
+      // faster group sends, but only with metadata that is still fresh
+      cachedGroupMetadata: async (jid) => {
+        const hit = metaCache.get(jid);
+        return hit && Date.now() - hit.t < GROUP_META_TTL ? hit.meta : undefined;
+      },
     });
     sock = s;
 
@@ -217,6 +227,7 @@ async function start() {
       if (s !== sock) return; // ignore events from old sockets
 
       if (connection === 'open') {
+        badRetries = 0;
         console.log(`✅ ${config.botName} connected as ${mask(s.user.id)}`);
 
         if (config.startupAlert?.enabled && !announced) {
@@ -262,6 +273,25 @@ async function start() {
           announced = false;
           await clearSession().catch((e) => console.error('clear session failed:', e.message));
           setTimeout(start, 3000);
+        } else if (code === DisconnectReason.badSession) {
+          // WhatsApp rejected the saved keys (500). A freshly linked device is often refused
+          // once while WhatsApp finishes registering it, so retry a few times with longer waits.
+          badRetries += 1;
+          if (badRetries > MAX_BAD_SESSION_RETRIES) {
+            console.error(
+              'WhatsApp keeps rejecting this session (500). Reconnects stopped. ' +
+              'Set a new SESSION_ID and restart the worker, or pair again.'
+            );
+            halted = true;
+            sock = null;
+          } else {
+            const wait = 30000 * badRetries;
+            console.log(
+              `Session rejected (500). Keeping the saved keys. ` +
+              `Retry ${badRetries}/${MAX_BAD_SESSION_RETRIES} in ${wait / 1000}s...`
+            );
+            setTimeout(start, wait);
+          }
         } else if (code === DisconnectReason.connectionReplaced) {
           // Another device or instance took over this login. Stop reconnecting so we don't
           // fight it. Stay alive but idle so the platform doesn't restart us in a loop.
@@ -352,10 +382,21 @@ function limited(sender) {
   return arr.length > maxRequests;
 }
 
+// Drop rate-limit history older than the window, so memory does not grow forever
+setInterval(() => {
+  const now = Date.now();
+  const window = config.rateLimit?.window || 60000;
+  for (const [sender, times] of hits) {
+    const recent = times.filter((t) => now - t < window);
+    if (recent.length) hits.set(sender, recent);
+    else hits.delete(sender);
+  }
+}, 60000).unref();
+
 const metaCache = new Map();
 async function getMeta(s, jid) {
   const hit = metaCache.get(jid);
-  if (hit && Date.now() - hit.t < 60000) return hit.meta;
+  if (hit && Date.now() - hit.t < GROUP_META_TTL) return hit.meta;
   const meta = await s.groupMetadata(jid);
   metaCache.set(jid, { meta, t: Date.now() });
   return meta;
@@ -491,8 +532,12 @@ async function shutdown() {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-// Anti-crash: log instead of dying (use the platform's auto-restart for hard crashes)
-process.on('uncaughtException', (e) => console.error('uncaught:', e.message));
-process.on('unhandledRejection', (e) => console.error('unhandled:', e?.message || e));
+// Unexpected errors leave the process in an unknown state, so log the full stack and exit.
+// The platform restarts the worker, and the single-instance lock keeps that restart safe.
+process.on('uncaughtException', (e) => {
+  console.error('uncaught:', e?.stack || e);
+  process.exit(1);
+});
+process.on('unhandledRejection', (e) => console.error('unhandled:', e?.stack || e?.message || e));
 
 start();
