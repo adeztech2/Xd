@@ -1,6 +1,13 @@
-// Silence libsignal's per-message session dumps. They print key material to the logs.
-// Must run before @whiskeysockets/baileys is required.
-const SILENCED = ['Closing session', 'Opening session', 'Removing old closed session', 'Decrypted message with closed session'];
+// Silence libsignal's per-message session dumps. They print key material to the logs,
+// and the "Closing open session" lines are routine noise. Must run before Baileys is loaded.
+const SILENCED = [
+  'Closing session',
+  'Closing open session',
+  'Opening session',
+  'Removing old closed session',
+  'Decrypted message with closed session',
+  'Migrating session',
+];
 for (const method of ['log', 'info', 'warn', 'debug']) {
   const original = console[method].bind(console);
   console[method] = (...args) => {
@@ -256,7 +263,7 @@ async function clearSession() {
 
 async function start() {
   if (starting) return; // never run two start() calls at once
-  if (replaced || halted || shuttingDown) return; // another instance owns this session, or WhatsApp rejected it
+  if (replaced || halted || shuttingDown) return; // another copy owns this session, or WhatsApp rejected it
   starting = true;
   try {
     console.log('Startup: starting');
@@ -265,6 +272,13 @@ async function start() {
     endSocket();
 
     console.log(`Startup: storage is ${pool ? 'Postgres' : 'local files'}`);
+    if (!pool) {
+      console.warn(
+        'No DATABASE_URL: the single-instance lock is off. If another copy of this bot uses the same ' +
+        'SESSION_ID (on Heroku, Render, or a VPS), WhatsApp will disconnect one of them with code 440. ' +
+        'Keep only one copy running.'
+      );
+    }
     await withTimeout(init(), STARTUP_STEP_MS, 'database setup');
 
     console.log('Startup: taking the instance lock');
@@ -310,7 +324,9 @@ async function start() {
     s.ev.on('creds.update', saveCreds);
 
     s.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
-      if (s !== sock) return; // ignore events from old sockets
+      // Ignore everything from a socket that was replaced or that is no longer in use,
+      // including events that arrive after a 440.
+      if (s !== sock || replaced) return;
 
       if (connection === 'open') {
         badRetries = 0;
@@ -358,15 +374,16 @@ async function start() {
         if (code === DisconnectReason.loggedOut) {
           console.log('Logged out by WhatsApp (401). Clearing the saved session...');
           announced = false;
+          endSocket();
           await clearSession().catch((e) => console.error('clear session failed:', e.message));
           setTimeout(start, 3000);
         } else if (code === DisconnectReason.badSession) {
           // WhatsApp rejected the saved keys (500). A freshly linked device is often refused
           // once while WhatsApp finishes registering it, so retry with longer waits first.
           badRetries += 1;
+          endSocket();
           if (badRetries > MAX_BAD_SESSION_RETRIES) {
             halted = true;
-            endSocket();
             console.error(
               'WhatsApp keeps rejecting this session (500). Reconnects stopped. ' +
               'Set a new SESSION_ID and restart the worker, or pair again.'
@@ -380,12 +397,16 @@ async function start() {
             setTimeout(start, wait);
           }
         } else if (code === DisconnectReason.connectionReplaced) {
-          // Another device or instance took over this login. Stop reconnecting so we don't
-          // fight it. Stay alive but idle so the platform doesn't restart us in a loop.
-          console.error('Connection replaced by another instance (440). Reconnect disabled. Restart the worker to take the session back.');
+          // Another copy took over this login. Reconnecting would only start a fight with it,
+          // so this copy stays idle until it is restarted. Its lock and socket are released.
           replaced = true;
           endSocket();
+          console.error(
+            'Another copy of this bot is using the same SESSION_ID (440). This copy has stopped. ' +
+            'Stop the other copy, then restart this worker.'
+          );
         } else {
+          endSocket();
           console.log('Reconnecting in 3s...');
           setTimeout(start, 3000);
         }
@@ -417,7 +438,7 @@ async function start() {
 
     // ── Messages ──
     s.ev.on('messages.upsert', async ({ messages, type }) => {
-      if (type !== 'notify') return;
+      if (type !== 'notify' || s !== sock || replaced) return;
       for (const m of messages) {
         try {
           await handle(s, m);
@@ -622,12 +643,26 @@ async function shutdown() {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-// Unexpected errors leave the process in an unknown state. Log the full stack and exit,
+// Unexpected errors leave the process in an unknown state. Log the stack and exit,
 // so the platform restarts the worker. The advisory lock keeps that restart safe.
 process.on('uncaughtException', (e) => {
   console.error('uncaught:', e?.stack || e);
   process.exit(1);
 });
-process.on('unhandledRejection', (e) => console.error('unhandled:', e?.stack || e?.message || e));
+
+// Baileys sends internal retry requests on sockets that may already be closed. Those
+// rejections ("Connection Closed") are harmless, so they are logged once and not as errors.
+let closedNoticeShown = false;
+process.on('unhandledRejection', (e) => {
+  const message = e?.message || String(e);
+  if (message === 'Connection Closed') {
+    if (!closedNoticeShown) {
+      closedNoticeShown = true;
+      console.log('Ignored a retry on a closed WhatsApp connection (harmless).');
+    }
+    return;
+  }
+  console.error('unhandled:', e?.stack || message);
+});
 
 start();
