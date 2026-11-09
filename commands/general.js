@@ -97,10 +97,12 @@ module.exports = [
 
       try {
         const image = await fetchMenuImage();
-        await sock.sendMessage(jid, { image, caption: `${config.botName} menu` }, { quoted: m });
+        await sock.sendMessage(jid, { image, caption: menuText }, { quoted: m });
+        return;
       } catch (error) {
         console.warn('Menu profile picture unavailable; sending text menu:', error.message);
       }
+
       await reply(menuText, { mentions: [sender] });
     },
   },
