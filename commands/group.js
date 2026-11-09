@@ -1,4 +1,4 @@
-const card = (title, lines) => `『 ${title} 』\n${[].concat(lines).map((line) => ` ⌬ ${line}`).join('\n')}`;
+const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
 const digits = (jid) => String(jid || '').split('@')[0].split(':')[0];
 
 function target(ctx) {
@@ -87,5 +87,31 @@ module.exports = [
     await ctx.db.set(`group-events:${ctx.jid}`, value === 'on');
     await ctx.reply(`Group event notices turned ${value}.`);
   }) },
-  { name: 'admins', hidden: true, desc: 'List group admins', groupOnly: true, run: async (ctx) => ctx.reply(card('ADMINS', (await getMeta(ctx)).participants.filter((p) => p.admin).map((p) => p.id))) },
+  {
+    name: 'del', alias: ['delete'], desc: 'Delete a replied message (admins)', groupOnly: true, adminOnly: true,
+    run: safe(async (ctx) => {
+      const msg = ctx.m.message || {};
+      const ci = msg.extendedTextMessage?.contextInfo || msg.ephemeralMessage?.message?.extendedTextMessage?.contextInfo;
+      if (!ci?.stanzaId) return ctx.reply('Reply to the message you want to delete with .del');
+      await ctx.sock.sendMessage(ctx.jid, { delete: { remoteJid: ctx.jid, fromMe: false, id: ci.stanzaId, participant: ci.participant } });
+    }),
+  },
+  {
+    name: 'leave', desc: 'Make the bot leave this group (owner)', groupOnly: true, ownerOnly: true,
+    run: safe(async (ctx) => { await ctx.reply('Goodbye 👋'); await ctx.sock.groupLeave(ctx.jid); }),
+  },
+  {
+    name: 'gpic', alias: ['setgpic'], desc: 'Set group picture (reply to an image)', groupOnly: true, adminOnly: true,
+    run: safe(async (ctx) => {
+      const q = ctx.quotedMsg?.ephemeralMessage?.message || ctx.quotedMsg;
+      const image = q?.imageMessage;
+      if (!image) return ctx.reply('Reply to an image with .gpic');
+      const chunks = [];
+      for await (const c of await downloadContentFromMessage(image, 'image')) chunks.push(c);
+      const buffer = Buffer.concat(chunks);
+      if (!buffer.length || buffer.length > 5 * 1024 * 1024) return ctx.reply('The image is empty or over 5 MB.');
+      await ctx.sock.updateProfilePicture(ctx.jid, buffer);
+      await ctx.reply('Group picture updated.');
+    }),
+  },
 ];
