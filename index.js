@@ -1,7 +1,7 @@
 // Silence libsignal's per-message session dumps. They print key material to the logs.
 // Must run before @whiskeysockets/baileys is required.
 const SILENCED = ['Closing session', 'Opening session', 'Removing old closed session', 'Decrypted message with closed session'];
-for (const method of ['log', 'info', 'warn']) {
+for (const method of ['log', 'info', 'warn', 'debug']) {
   const original = console[method].bind(console);
   console[method] = (...args) => {
     if (typeof args[0] === 'string' && SILENCED.some((p) => args[0].startsWith(p))) return;
@@ -32,8 +32,10 @@ const { importSession, markSessionRejected, STORE_KEY } = require('./session-imp
 const GROUP_LINK = 'https://chat.whatsapp.com/CvpcZcqPckCCIFT1QpQsqs';
 const CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb8N0xYLikgHxdGh790m';
 
-const GROUP_META_TTL = 60000;   // group metadata is refreshed after 60 seconds
-const MAX_BAD_SESSION_RETRIES = 3;
+const GROUP_META_TTL = 60000;       // group metadata is refreshed after 60 seconds
+const MAX_BAD_SESSION_RETRIES = 3;  // code-500 retries before reconnects stop
+const STARTUP_STEP_MS = 30000;      // a startup step that takes longer than this fails and retries
+const CONNECT_TIMEOUT_MS = 20000;   // a database connection that takes longer than this fails
 
 // ── Load commands (each file exports an array) ──
 const commands = new Map();
@@ -134,28 +136,42 @@ if (process.env.PORT) {
 }
 
 // ── State shared across restarts of the socket ──
-let sock = null;        // the ONE active socket
-let lockClient = null;  // Postgres connection that holds the single-instance lock
+let sock = null;          // the ONE active socket
+let lockClient = null;    // Postgres connection that holds the single-instance lock
 let starting = false;
-let replaced = false;   // set when another device/instance took over this session
-let halted = false;     // set when WhatsApp keeps rejecting the saved session (code 500)
-let badRetries = 0;     // code-500 retries since the last successful connection
+let replaced = false;     // set when another device/instance took over this session (440)
+let halted = false;       // set when WhatsApp keeps rejecting the saved session (500)
+let badRetries = 0;       // code-500 retries since the last successful connection
 const LOCK_ID = 727272;
+
+// Fails a step after a time limit, so a stalled step becomes an error and the bot retries.
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 // Only one instance may use the WhatsApp session at a time. During a deploy the new
 // instance waits here until the old one has shut down (and released the lock).
 async function acquireLock() {
   if (!pool || lockClient) return;
-  const client = await pool.connect();
+  const client = await withTimeout(pool.connect(), CONNECT_TIMEOUT_MS, 'database connection');
   client.on('error', (e) => {
     console.error('lock connection lost:', e.message);
     process.exit(1); // let the platform restart us cleanly
   });
-  for (;;) {
-    const r = await client.query('SELECT pg_try_advisory_lock($1) AS ok', [LOCK_ID]);
-    if (r.rows[0].ok) break;
-    console.log('Another instance is running, waiting for it to stop...');
-    await new Promise((res) => setTimeout(res, 5000));
+  try {
+    for (;;) {
+      const r = await client.query('SELECT pg_try_advisory_lock($1) AS ok', [LOCK_ID]);
+      if (r.rows[0].ok) break;
+      console.log('Another instance is running, waiting for it to stop...');
+      await new Promise((res) => setTimeout(res, 5000));
+    }
+  } catch (e) {
+    client.release(true);
+    throw e;
   }
   lockClient = client;
   console.log('Instance lock acquired');
@@ -177,15 +193,22 @@ async function start() {
   if (replaced || halted) return; // another instance owns this session, or WhatsApp rejected it
   starting = true;
   try {
+    console.log('Startup: starting');
+
     // End the previous socket so it can't keep reconnecting or fighting with the new one
     if (sock) {
       try { sock.end(undefined); } catch {}
       sock = null;
     }
 
-    await init();
+    console.log(`Startup: storage is ${pool ? 'Postgres' : 'local files'}`);
+    await withTimeout(init(), STARTUP_STEP_MS, 'database setup');
+
+    console.log('Startup: taking the instance lock');
     await acquireLock();
-    await importSession();
+
+    console.log('Startup: importing SESSION_ID');
+    await withTimeout(importSession(), STARTUP_STEP_MS, 'session import');
     console.log(pool ? 'Session storage: Postgres' : 'Session storage: LOCAL files (lost on every redeploy!)');
 
     const { state, saveCreds } = pool
@@ -198,7 +221,7 @@ async function start() {
       return; // stay idle, no reconnect loop
     }
 
-    const { version } = await fetchLatestBaileysVersion();
+    const { version } = await withTimeout(fetchLatestBaileysVersion(), STARTUP_STEP_MS, 'version check');
 
     const s = makeWASocket({
       version,
@@ -275,15 +298,15 @@ async function start() {
           setTimeout(start, 3000);
         } else if (code === DisconnectReason.badSession) {
           // WhatsApp rejected the saved keys (500). A freshly linked device is often refused
-          // once while WhatsApp finishes registering it, so retry a few times with longer waits.
+          // once while WhatsApp finishes registering it, so retry with longer waits first.
           badRetries += 1;
           if (badRetries > MAX_BAD_SESSION_RETRIES) {
+            halted = true;
+            sock = null;
             console.error(
               'WhatsApp keeps rejecting this session (500). Reconnects stopped. ' +
               'Set a new SESSION_ID and restart the worker, or pair again.'
             );
-            halted = true;
-            sock = null;
           } else {
             const wait = 30000 * badRetries;
             console.log(
@@ -515,13 +538,15 @@ async function handle(sock, m) {
   if (config.autoTyping) sock.sendPresenceUpdate('paused', jid).catch(() => {});
 }
 
-// Graceful shutdown: stop the socket, save pending data, release the lock, then exit.
-// This is the only SIGTERM handler, so the order is always the same.
+// ── Shutdown ──
+// One shutdown path: stop the socket, save pending data, release the lock, then exit.
+// Heroku and Render allow about 30 seconds, so a hard exit timer is set as a backstop.
 let shuttingDown = false;
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log('Shutting down...');
+  setTimeout(() => process.exit(0), 10000).unref();
   try { sock?.end(undefined); } catch {}
   await db.flush().catch(() => {});
   if (lockClient) {
@@ -532,3 +557,13 @@ async function shutdown() {
 }
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+
+// Unexpected errors leave the process in an unknown state. Log the full stack and exit,
+// so the platform restarts the worker. The advisory lock keeps that restart safe.
+process.on('uncaughtException', (e) => {
+  console.error('uncaught:', e?.stack || e);
+  process.exit(1);
+});
+process.on('unhandledRejection', (e) => console.error('unhandled:', e?.stack || e?.message || e));
+
+start();
