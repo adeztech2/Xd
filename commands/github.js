@@ -141,42 +141,4 @@ module.exports = [
       await ctx.reply(`Latest release: ${release.name || release.tag_name}\nTag: ${release.tag_name}\nPublished: ${release.published_at ? new Date(release.published_at).toDateString() : 'unknown'}\n${release.html_url}`);
     }),
   },
-  {
-    name: 'gitzip',
-    desc: 'Download a GitHub repo as zip',
-    run: safe(async (ctx) => {
-      const name = (ctx.text || '').trim();
-      if (!validRepo(name)) return ctx.reply('Example: .gitzip owner/name');
-      const f = await fetchFile(`https://api.github.com/repos/${name}/zipball`);
-      if (f.tooBig) return ctx.reply(`That repo is bigger than ${MAX_MB} MB.`);
-      await ctx.sock.sendMessage(ctx.jid, {
-        document: f.buf,
-        mimetype: 'application/zip',
-        fileName: `${name.split('/')[1]}.zip`,
-      });
-    }),
-  },
-  {
-    name: 'dl',
-    desc: 'Download a file from a direct link',
-    run: safe(async (ctx) => {
-      const link = (ctx.text || '').trim();
-      let url;
-      try {
-        url = new URL(link);
-      } catch (e) {
-        return ctx.reply('Example: .dl https://example.com/file.pdf');
-      }
-      if (!/^https?:$/.test(url.protocol) || isPrivateHost(url.hostname)) {
-        return ctx.reply('That link is not allowed.');
-      }
-      const f = await fetchFile(url.href);
-      if (f.tooBig) return ctx.reply(`That file is bigger than ${MAX_MB} MB.`);
-      let fileName = 'file';
-      try {
-        fileName = decodeURIComponent(url.pathname.split('/').pop() || '') || 'file';
-      } catch {}
-      await ctx.sock.sendMessage(ctx.jid, { document: f.buf, mimetype: f.type, fileName });
-    }),
-  },
 ];
