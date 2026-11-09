@@ -37,7 +37,6 @@ const MAX_BAD_SESSION_RETRIES = 3;   // code-500 retries before reconnects stop
 const STARTUP_STEP_MS = 30000;       // a startup step that takes longer than this fails and retries
 const CONNECT_TIMEOUT_MS = 20000;    // a database connection that takes longer than this fails
 const LOCK_PING_MS = 30000;          // how often the lock connection is checked
-const SELF_PING_MS = 10 * 60 * 1000; // keeps Render's free web service awake
 
 // ── Load commands (each file exports an array) ──
 const commands = new Map();
@@ -127,26 +126,39 @@ function buildStartupAlert(s) {
 
 let announced = false; // so reconnects don't re-send the alert
 
-// Web hosts need an open port. Only start the HTTP server when PORT is set (Render, Railway, etc.).
+// ── HTTP server and keep-alive ──
+// Render's free web services sleep after 15 minutes without inbound traffic.
+// This server answers requests, and the bot pings its own public URL so Render sees traffic.
+const KEEP_ALIVE_MS = 10 * 60 * 1000;
+const PUBLIC_URL = (process.env.KEEP_ALIVE_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
+let keepAliveFailures = 0;
+
 if (process.env.PORT) {
   http
     .createServer((req, res) => {
-      if (req.url === '/health') {
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        return res.end(`${config.botName} is running`);
-      }
       res.writeHead(200, { 'Content-Type': 'text/plain' });
-      res.end(`${config.botName} is running`);
+      res.end(`${config.botName} is running. Connected: ${sock ? 'yes' : 'no'}`);
     })
-    .listen(process.env.PORT, () => console.log(`HTTP keep-alive on port ${process.env.PORT}`));
+    .listen(process.env.PORT, () => console.log(`HTTP server on port ${process.env.PORT}`));
 
-  // Render's free web services sleep after about 15 minutes without inbound traffic.
-  // Requesting our own public URL counts as traffic, so the bot stays awake.
-  const selfUrl = process.env.RENDER_EXTERNAL_URL;
-  if (selfUrl) {
-    setInterval(() => {
-      fetch(`${selfUrl}/health`).catch(() => {});
-    }, SELF_PING_MS).unref();
+  if (PUBLIC_URL) {
+    console.log(`Keep-alive: pinging ${PUBLIC_URL} every ${KEEP_ALIVE_MS / 60000} minutes`);
+    setInterval(async () => {
+      try {
+        const res = await fetch(`${PUBLIC_URL}/health`, { signal: AbortSignal.timeout(20000) });
+        if (res.ok) {
+          keepAliveFailures = 0;
+        } else {
+          keepAliveFailures += 1;
+          console.warn(`Keep-alive: HTTP ${res.status} (${keepAliveFailures} in a row)`);
+        }
+      } catch (e) {
+        keepAliveFailures += 1;
+        console.warn(`Keep-alive failed (${keepAliveFailures} in a row): ${e.message}`);
+      }
+    }, KEEP_ALIVE_MS).unref();
+  } else {
+    console.warn('Keep-alive is off. Set KEEP_ALIVE_URL to your service URL, or the free web service will sleep.');
   }
 }
 
@@ -158,6 +170,7 @@ let starting = false;
 let replaced = false;     // set when another device/instance took over this session (440)
 let halted = false;       // set when WhatsApp keeps rejecting the saved session (500)
 let badRetries = 0;       // code-500 retries since the last successful connection
+let shuttingDown = false;
 const LOCK_ID = 727272;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -243,7 +256,7 @@ async function clearSession() {
 
 async function start() {
   if (starting) return; // never run two start() calls at once
-  if (replaced || halted) return; // another instance owns this session, or WhatsApp rejected it
+  if (replaced || halted || shuttingDown) return; // another instance owns this session, or WhatsApp rejected it
   starting = true;
   try {
     console.log('Startup: starting');
@@ -534,4 +547,87 @@ async function handle(sock, m) {
   const isOwner = m.key.fromMe || num(sender) === config.owner;
   const ci = msg.extendedTextMessage?.contextInfo;
 
-  const c
+  const ctx = {
+    sock, m, jid, sender, isGroup, isOwner, args, body, db,
+    text: args.join(' '),
+    prefix, list, config, num,
+    mentioned: ci?.mentionedJid || [],
+    quotedSender: ci?.participant,
+    quotedMsg: ci?.quotedMessage,
+    reply: (text, opts = {}) => sock.sendMessage(jid, { text, ...opts }, { quoted: m }),
+    group: {
+      kick: (u) => sock.groupParticipantsUpdate(jid, [u], 'remove'),
+      promote: (u) => sock.groupParticipantsUpdate(jid, [u], 'promote'),
+      demote: (u) => sock.groupParticipantsUpdate(jid, [u], 'demote'),
+      members: async () => (await getMeta(sock, jid)).participants.map((p) => p.id),
+    },
+  };
+
+  if (isGroup) {
+    try {
+      ctx.meta = await getMeta(sock, jid);
+      const admins = ctx.meta.participants.filter((p) => p.admin).map((p) => jidNormalizedUser(p.id));
+      ctx.isAdmin = admins.includes(jidNormalizedUser(sender)) || isOwner;
+      ctx.botIsAdmin = admins.includes(jidNormalizedUser(sock.user.id));
+    } catch (e) {
+      ctx.isAdmin = isOwner;
+      ctx.botIsAdmin = false;
+    }
+  }
+
+  // Access gate: in private mode, strangers get nothing (no plugins, no commands)
+  if (!config.publicMode && !isOwner) return;
+
+  // ── Plugin hooks (run for allowed users, except the bot's own messages) ──
+  if (!m.key.fromMe) {
+    for (const p of plugins) {
+      if (p.events?.message) await p.events.message(ctx, { db }).catch((e) => console.error(`[${p.name}]`, e.message));
+    }
+  }
+
+  // ── Commands ──
+  const cmd = commands.get((cmdName || '').toLowerCase());
+  if (!cmd) return;
+
+  if (!isOwner && config.rateLimit?.enabled && limited(sender)) return;
+  if (cmd.ownerOnly && !isOwner) return;
+  if (cmd.groupOnly && !isGroup) return ctx.reply('Group only command.');
+  if (cmd.adminOnly && !ctx.isAdmin) return ctx.reply('Admins only.');
+  if (cmd.adminOnly && !ctx.botIsAdmin) return ctx.reply('Make me admin first.');
+
+  if (config.autoRead) sock.readMessages([m.key]).catch(() => {});
+  if (config.autoTyping) sock.sendPresenceUpdate('composing', jid).catch(() => {});
+
+  await cmd.run(ctx);
+  if (config.autoTyping) sock.sendPresenceUpdate('paused', jid).catch(() => {});
+}
+
+// ── Shutdown ──
+// One shutdown path: stop the socket, save pending data, release the lock, then exit.
+// Heroku and Render allow about 30 seconds, so a hard exit timer is set as a backstop.
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log('Shutting down...');
+  setTimeout(() => process.exit(0), 10000).unref();
+  clearInterval(lockTimer);
+  endSocket();
+  await db.flush().catch(() => {});
+  if (lockClient) {
+    try { await lockClient.query('SELECT pg_advisory_unlock($1)', [LOCK_ID]); } catch {}
+    try { lockClient.release(true); } catch {}
+  }
+  process.exit(0);
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
+// Unexpected errors leave the process in an unknown state. Log the full stack and exit,
+// so the platform restarts the worker. The advisory lock keeps that restart safe.
+process.on('uncaughtException', (e) => {
+  console.error('uncaught:', e?.stack || e);
+  process.exit(1);
+});
+process.on('unhandledRejection', (e) => console.error('unhandled:', e?.stack || e?.message || e));
+
+start();
