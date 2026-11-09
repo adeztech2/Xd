@@ -35,6 +35,7 @@ const { pool, init } = require('./pg');
 const { usePgAuthState } = require('./auth-pg');
 // SESSION_ID must start with ADEZ-XMD~ (validated in session-import.js)
 const { importSession, markSessionRejected, STORE_KEY } = require('./session-import');
+const { applyRuntimeSettings } = require('./lib/runtime');
 
 const GROUP_LINK = 'https://chat.whatsapp.com/CvpcZcqPckCCIFT1QpQsqs';
 const CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb8N0xYLikgHxdGh790m';
@@ -280,6 +281,9 @@ async function start() {
       );
     }
     await withTimeout(init(), STARTUP_STEP_MS, 'database setup');
+
+    // Re-apply owner changes (mode, prefix, bot name, toggles) saved before the restart.
+    await applyRuntimeSettings(config).catch((e) => console.error('runtime settings failed:', e.message));
 
     console.log('Startup: taking the instance lock');
     await acquireLock();
