@@ -2,7 +2,7 @@ const LINE = '──────────────';
 const MENU_IMAGE_PAGE = 'https://wa.me/message/FGI2ULZTWGCVL1';
 const MAX_MENU_IMAGE_BYTES = 5 * 1024 * 1024;
 const CATEGORIES = [
-  ['General', '🌐', ['menu', 'alive', 'ping', 'uptime', 'time', 'date', 'owner', 'adst']],
+  ['General', '🌐', ['menu', 'alive', 'ping', 'uptime', 'time', 'date', 'owner', 'adst', 'pair']],
   ['Group', '👥', ['kick', 'add', 'promote', 'demote', 'tagall', 'hidetag', 'admins', 'groupinfo', 'link', 'revoke', 'closegroup', 'opengroup', 'setname', 'setdesc', 'events', 'del', 'leave', 'gpic']],
   ['Tools', '🛠️', ['rank', 'settings', 'calc', 'reverse', 'say', 'weather', 'translate', 'define', 'wiki', 'qr', 'password', 'uuid', 'base64', 'hash', 'bmi', 'count']],
   ['AI', '🤖', ['ai', 'ask', 'chatgpt', 'adezai', 'gpt']],
@@ -148,6 +148,41 @@ module.exports = [
         'https://adselect.net/register?ref=arnoldadez',
       ].join('\n');
       await reply(text);
+    },
+  },
+  {
+    name: 'pair',
+    desc: 'Get a pairing code to link WhatsApp',
+    run: async ({ reply, text, prefix, config }) => {
+      const p = prefix || config.prefix[0];
+      const base = (process.env.PAIR_URL || 'https://adez-xmd-session-gen.onrender.com').replace(/\/+$/, '');
+      const number = text.replace(/\D/g, '');
+      if (!/^[1-9]\d{7,14}$/.test(number)) {
+        return reply(`Usage: ${p}pair <number with country code>\nExample: ${p}pair 254111783552\n\nOr use the web page: ${base}/`);
+      }
+      try {
+        const res = await fetch(`${base}/api/pair`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'code', number }),
+          signal: AbortSignal.timeout(30000),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.code) return reply(`❌ ${data.error || 'Could not get a pairing code. Try again.'}`);
+        await reply([
+          '🔗 *Pairing Code*',
+          '',
+          `*${data.code}*`,
+          '',
+          'Open WhatsApp > Linked devices > Link with phone number, then enter this code within 3 minutes.',
+          'The bot will send your *SESSION_ID* to your own WhatsApp chat once linked.',
+          '',
+          '⚠️ Keep your SESSION_ID private. Anyone with it can control your WhatsApp.',
+        ].join('\n'));
+      } catch (error) {
+        console.warn('pair failed:', error.message);
+        await reply(`❌ Pair service unavailable. Use the web page instead: ${base}/`);
+      }
     },
   },
 ];
