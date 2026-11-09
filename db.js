@@ -1,5 +1,5 @@
 // Tiny key-value store (async get/set/del). Postgres when DATABASE_URL is set, otherwise data/db.json.
-// Writes are batched every 10s and flushed on shutdown (Heroku sends SIGTERM before restarting).
+// Writes are batched every 10s. index.js calls flush() during shutdown, so pending writes are saved.
 const fs = require('fs');
 const path = require('path');
 const { pool } = require('./pg');
@@ -22,7 +22,10 @@ async function flush() {
     if (pool) {
       for (const k of keys) {
         if (store.has(k)) {
-          await pool.query('INSERT INTO kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2', [k, JSON.stringify(store.get(k))]);
+          await pool.query(
+            'INSERT INTO kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2',
+            [k, JSON.stringify(store.get(k))]
+          );
         } else {
           await pool.query('DELETE FROM kv WHERE key = $1', [k]);
         }
@@ -38,10 +41,6 @@ async function flush() {
 }
 
 setInterval(flush, 10000).unref();
-process.on('SIGTERM', async () => {
-  await flush();
-  process.exit(0);
-});
 
 module.exports = {
   get: async (k) => {
@@ -56,6 +55,14 @@ module.exports = {
     }
     return undefined;
   },
-  set: async (k, v) => { store.set(k, v); dirty.add(k); return v; },
-  del: async (k) => { store.delete(k); dirty.add(k); },
+  set: async (k, v) => {
+    store.set(k, v);
+    dirty.add(k);
+    return v;
+  },
+  del: async (k) => {
+    store.delete(k);
+    dirty.add(k);
+  },
+  flush,
 };
