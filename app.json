@@ -2,16 +2,48 @@
   "name": "ADEZ XMD",
   "description": "ADEZ XMD is a WhatsApp bot with a terminal-style menu, group tools and fun commands.",
   "keywords": ["whatsapp", "bot", "baileys", "adez", "xmd"],
+  "stack": "heroku-24",
   "buildpacks": [{ "url": "heroku/nodejs" }],
+  "addons": ["heroku-postgresql:essential-0"],
   "formation": { "worker": { "quantity": 1, "size": "basic" } },
   "env": {
-    "SESSION_ID": { "description": "Session ID from the pair page. Keep it private: anyone with it can control the linked WhatsApp account.", "required": true },
-    "OPENAI_API_KEY": { "description": "Optional API key for the .ai/.ask assistant commands.", "required": false },
-    "BOT_NAME": { "description": "Name shown by the bot", "value": "ADEZ XMD", "required": false },
-    "PREFIX": { "description": "Command prefix", "value": ".", "required": false },
-    "OWNER_NUMBER": { "description": "Your WhatsApp number with country code, digits only, no + sign.", "value": "", "required": false },
-    "MODE": { "description": "Who can use bot commands: public or private", "value": "public", "required": false },
-    "TIMEZONE": { "description": "Timezone for time display, e.g. Africa/Nairobi", "value": "Africa/Nairobi", "required": false },
-    "AUTO_REACT": { "description": "React to incoming messages (true or false)", "value": "true", "required": false }
+    "SESSION_ID": {
+      "description": "Session ID from the pair page. Keep it private: anyone with it can control the linked WhatsApp account.",
+      "required": true
+    },
+    "OPENAI_API_KEY": {
+      "description": "Optional API key for the .ai/.ask assistant commands.",
+      "required": false
+    },
+    "BOT_NAME": {
+      "description": "Name shown by the bot",
+      "value": "ADEZ XMD",
+      "required": false
+    },
+    "PREFIX": {
+      "description": "Command prefix",
+      "value": ".",
+      "required": false
+    },
+    "OWNER_NUMBER": {
+      "description": "Your WhatsApp number with country code, digits only, no + sign.",
+      "value": "",
+      "required": false
+    },
+    "MODE": {
+      "description": "Who can use bot commands: public or private",
+      "value": "public",
+      "required": false
+    },
+    "TIMEZONE": {
+      "description": "Timezone for time display, e.g. Africa/Nairobi",
+      "value": "Africa/Nairobi",
+      "required": false
+    },
+    "AUTO_REACT": {
+      "description": "React to incoming messages (true or false)",
+      "value": "true",
+      "required": false
+    }
   }
 }
