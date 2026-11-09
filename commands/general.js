@@ -95,8 +95,6 @@ module.exports = [
       ].join('\n'));
       const menuText = [header, ...rows, `_Use ${p}<command> to run a command._`].join('\n\n');
 
-      // wa.me links are landing pages, not image files. Use their public Open Graph
-      // image when available, and always fall back to the regular text menu.
       try {
         const image = await fetchMenuImage();
         await sock.sendMessage(jid, { image, caption: `${config.botName} menu` }, { quoted: m });
@@ -111,5 +109,13 @@ module.exports = [
   { name: 'uptime', desc: 'Show uptime', run: async ({ reply }) => reply(`Uptime: ${uptime()}`) },
   { name: 'time', desc: 'Show current time', run: async ({ reply, config }) => reply(new Date().toLocaleString('en-GB', { timeZone: config.startupAlert?.timezone || 'UTC' })) },
   { name: 'date', desc: 'Show today’s date', run: async ({ reply, config }) => reply(new Date().toLocaleDateString('en-GB', { timeZone: config.startupAlert?.timezone || 'UTC', dateStyle: 'full' })) },
-  { name: 'owner', desc: 'Show owner contact', run: async ({ reply, config }) => reply(`Owner: https://wa.me/${config.owner || '254111783552'}`) },
+  {
+    name: 'owner',
+    desc: 'Show owner contact',
+    run: async ({ reply, config }) => {
+      const ownerNumber = (config.owner || process.env.OWNER_NUMBER || '254111783552').replace(/\D/g, '');
+      const ownerLink = `https://wa.me/${ownerNumber}`;
+      await reply(`Owner: ${ownerLink}`);
+    },
+  },
 ];
