@@ -3,12 +3,13 @@ const MENU_IMAGE_PAGE = 'https://wa.me/message/FGI2ULZTWGCVL1';
 const MAX_MENU_IMAGE_BYTES = 5 * 1024 * 1024;
 const CATEGORIES = [
   ['General', '🌐', ['menu', 'alive', 'ping', 'uptime', 'time', 'date', 'owner']],
-  ['Group', '👥', ['kick', 'add', 'promote', 'demote', 'tagall', 'hidetag', 'admins', 'groupinfo', 'link', 'revoke', 'closegroup', 'opengroup', 'setname', 'setdesc', 'events']],
-  ['Tools', '🛠️', ['rank', 'vv', 'calc', 'reverse', 'say']], ['AI', '🤖', ['ai', 'ask', 'adezai']],
+  ['Group', '👥', ['kick', 'add', 'promote', 'demote', 'tagall', 'hidetag', 'admins', 'groupinfo', 'link', 'revoke', 'closegroup', 'opengroup', 'setname', 'setdesc', 'events', 'del', 'leave', 'gpic']],
+  ['Tools', '🛠️', ['rank', 'settings', 'calc', 'reverse', 'say', 'weather', 'translate', 'define', 'wiki', 'qr', 'password', 'uuid', 'base64', 'hash', 'bmi', 'count']],
+  ['AI', '🤖', ['ai', 'ask', 'chatgpt', 'adezai', 'gpt']],
   ['Download', '📥', ['play', 'yts', 'dl', 'dlimage', 'dlvideo', 'dlaudio', 'apk', 'facebook', 'instagram', 'tgsticker', 'gitzip', 'gitfile', 'npm']],
   ['GitHub', '🐙', ['github', 'repo', 'repos', 'ghsearch', 'ghissues', 'ghcommits', 'ghrelease']],
-  ['Settings', '⚙️', ['mode', 'toggle', 'settings', 'setprefix', 'setbotname', 'setpic']],
-  ['Fun', '🎉', ['quote', 'fact', 'flip', 'dice', '8ball', 'joke']],
+  ['Settings', '⚙️', ['mode', 'toggle', 'setprefix', 'setbotname', 'setpic', 'vv']],
+  ['Fun', '🎉', ['quote', 'fact', 'flip', 'dice', '8ball', 'joke', 'choose', 'rate', 'truth', 'dare', 'ship', 'pickup', 'compliment', 'roast']],
 ];
 
 function getGroups(list) {
