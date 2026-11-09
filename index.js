@@ -32,10 +32,12 @@ const { importSession, markSessionRejected, STORE_KEY } = require('./session-imp
 const GROUP_LINK = 'https://chat.whatsapp.com/CvpcZcqPckCCIFT1QpQsqs';
 const CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb8N0xYLikgHxdGh790m';
 
-const GROUP_META_TTL = 60000;       // group metadata is refreshed after 60 seconds
-const MAX_BAD_SESSION_RETRIES = 3;  // code-500 retries before reconnects stop
-const STARTUP_STEP_MS = 30000;      // a startup step that takes longer than this fails and retries
-const CONNECT_TIMEOUT_MS = 20000;   // a database connection that takes longer than this fails
+const GROUP_META_TTL = 60000;        // group metadata is refreshed after 60 seconds
+const MAX_BAD_SESSION_RETRIES = 3;   // code-500 retries before reconnects stop
+const STARTUP_STEP_MS = 30000;       // a startup step that takes longer than this fails and retries
+const CONNECT_TIMEOUT_MS = 20000;    // a database connection that takes longer than this fails
+const LOCK_PING_MS = 30000;          // how often the lock connection is checked
+const SELF_PING_MS = 10 * 60 * 1000; // keeps Render's free web service awake
 
 // ── Load commands (each file exports an array) ──
 const commands = new Map();
@@ -129,20 +131,36 @@ let announced = false; // so reconnects don't re-send the alert
 if (process.env.PORT) {
   http
     .createServer((req, res) => {
+      if (req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        return res.end(`${config.botName} is running`);
+      }
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       res.end(`${config.botName} is running`);
     })
     .listen(process.env.PORT, () => console.log(`HTTP keep-alive on port ${process.env.PORT}`));
+
+  // Render's free web services sleep after about 15 minutes without inbound traffic.
+  // Requesting our own public URL counts as traffic, so the bot stays awake.
+  const selfUrl = process.env.RENDER_EXTERNAL_URL;
+  if (selfUrl) {
+    setInterval(() => {
+      fetch(`${selfUrl}/health`).catch(() => {});
+    }, SELF_PING_MS).unref();
+  }
 }
 
 // ── State shared across restarts of the socket ──
 let sock = null;          // the ONE active socket
 let lockClient = null;    // Postgres connection that holds the single-instance lock
+let lockTimer = null;     // periodic check that the lock connection is still alive
 let starting = false;
 let replaced = false;     // set when another device/instance took over this session (440)
 let halted = false;       // set when WhatsApp keeps rejecting the saved session (500)
 let badRetries = 0;       // code-500 retries since the last successful connection
 const LOCK_ID = 727272;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Fails a step after a time limit, so a stalled step becomes an error and the bot retries.
 function withTimeout(promise, ms, label) {
@@ -153,28 +171,63 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-// Only one instance may use the WhatsApp session at a time. During a deploy the new
-// instance waits here until the old one has shut down (and released the lock).
+function endSocket() {
+  if (sock) {
+    try { sock.end(undefined); } catch {}
+    sock = null;
+  }
+}
+
+// Only one instance may use the WhatsApp session at a time. The lock is held on a
+// dedicated Postgres connection. It is checked regularly, and if it is lost the bot
+// stops, takes the lock again, and restarts. It never exits for this reason.
 async function acquireLock() {
   if (!pool || lockClient) return;
-  const client = await withTimeout(pool.connect(), CONNECT_TIMEOUT_MS, 'database connection');
-  client.on('error', (e) => {
-    console.error('lock connection lost:', e.message);
-    process.exit(1); // let the platform restart us cleanly
-  });
-  try {
-    for (;;) {
+  for (;;) {
+    const client = await withTimeout(pool.connect(), CONNECT_TIMEOUT_MS, 'database connection');
+    client.on('error', (e) => {
+      if (lockClient === client) onLockLost(`connection error: ${e.message}`);
+    });
+    try {
       const r = await client.query('SELECT pg_try_advisory_lock($1) AS ok', [LOCK_ID]);
-      if (r.rows[0].ok) break;
-      console.log('Another instance is running, waiting for it to stop...');
-      await new Promise((res) => setTimeout(res, 5000));
+      if (r.rows[0].ok) {
+        lockClient = client;
+        startLockPing();
+        console.log('Instance lock acquired');
+        return;
+      }
+      client.release(true);
+    } catch (e) {
+      try { client.release(true); } catch {}
+      throw e;
     }
-  } catch (e) {
-    client.release(true);
-    throw e;
+    console.log('Another instance is running, waiting for it to stop...');
+    await sleep(5000);
   }
-  lockClient = client;
-  console.log('Instance lock acquired');
+}
+
+function startLockPing() {
+  clearInterval(lockTimer);
+  lockTimer = setInterval(async () => {
+    try {
+      await withTimeout(lockClient.query('SELECT 1'), 15000, 'lock check');
+    } catch (e) {
+      onLockLost(e.message);
+    }
+  }, LOCK_PING_MS);
+}
+
+// The lock connection dropped (often because the database closed an idle connection).
+// Stop the socket, release what is left, and start again, which takes the lock once more.
+function onLockLost(reason) {
+  if (shuttingDown) return;
+  console.error(`Instance lock lost (${reason}). Restarting the connection...`);
+  clearInterval(lockTimer);
+  lockTimer = null;
+  try { lockClient?.release(true); } catch {}
+  lockClient = null;
+  endSocket();
+  setTimeout(start, 3000);
 }
 
 // Wipes the saved WhatsApp login (used only when WhatsApp says we were really logged out).
@@ -196,10 +249,7 @@ async function start() {
     console.log('Startup: starting');
 
     // End the previous socket so it can't keep reconnecting or fighting with the new one
-    if (sock) {
-      try { sock.end(undefined); } catch {}
-      sock = null;
-    }
+    endSocket();
 
     console.log(`Startup: storage is ${pool ? 'Postgres' : 'local files'}`);
     await withTimeout(init(), STARTUP_STEP_MS, 'database setup');
@@ -290,6 +340,7 @@ async function start() {
 
       if (connection === 'close') {
         const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
+        console.log(`Connection closed (code ${code}): ${lastDisconnect?.error?.message || 'no details'}`);
 
         if (code === DisconnectReason.loggedOut) {
           console.log('Logged out by WhatsApp (401). Clearing the saved session...');
@@ -302,7 +353,7 @@ async function start() {
           badRetries += 1;
           if (badRetries > MAX_BAD_SESSION_RETRIES) {
             halted = true;
-            sock = null;
+            endSocket();
             console.error(
               'WhatsApp keeps rejecting this session (500). Reconnects stopped. ' +
               'Set a new SESSION_ID and restart the worker, or pair again.'
@@ -320,9 +371,9 @@ async function start() {
           // fight it. Stay alive but idle so the platform doesn't restart us in a loop.
           console.error('Connection replaced by another instance (440). Reconnect disabled. Restart the worker to take the session back.');
           replaced = true;
-          sock = null;
+          endSocket();
         } else {
-          console.log(`Connection closed (${code}), reconnecting...`);
+          console.log('Reconnecting in 3s...');
           setTimeout(start, 3000);
         }
       }
@@ -483,87 +534,4 @@ async function handle(sock, m) {
   const isOwner = m.key.fromMe || num(sender) === config.owner;
   const ci = msg.extendedTextMessage?.contextInfo;
 
-  const ctx = {
-    sock, m, jid, sender, isGroup, isOwner, args, body, db,
-    text: args.join(' '),
-    prefix, list, config, num,
-    mentioned: ci?.mentionedJid || [],
-    quotedSender: ci?.participant,
-    quotedMsg: ci?.quotedMessage,
-    reply: (text, opts = {}) => sock.sendMessage(jid, { text, ...opts }, { quoted: m }),
-    group: {
-      kick: (u) => sock.groupParticipantsUpdate(jid, [u], 'remove'),
-      promote: (u) => sock.groupParticipantsUpdate(jid, [u], 'promote'),
-      demote: (u) => sock.groupParticipantsUpdate(jid, [u], 'demote'),
-      members: async () => (await getMeta(sock, jid)).participants.map((p) => p.id),
-    },
-  };
-
-  if (isGroup) {
-    try {
-      ctx.meta = await getMeta(sock, jid);
-      const admins = ctx.meta.participants.filter((p) => p.admin).map((p) => jidNormalizedUser(p.id));
-      ctx.isAdmin = admins.includes(jidNormalizedUser(sender)) || isOwner;
-      ctx.botIsAdmin = admins.includes(jidNormalizedUser(sock.user.id));
-    } catch (e) {
-      ctx.isAdmin = isOwner;
-      ctx.botIsAdmin = false;
-    }
-  }
-
-  // Access gate: in private mode, strangers get nothing (no plugins, no commands)
-  if (!config.publicMode && !isOwner) return;
-
-  // ── Plugin hooks (run for allowed users, except the bot's own messages) ──
-  if (!m.key.fromMe) {
-    for (const p of plugins) {
-      if (p.events?.message) await p.events.message(ctx, { db }).catch((e) => console.error(`[${p.name}]`, e.message));
-    }
-  }
-
-  // ── Commands ──
-  const cmd = commands.get((cmdName || '').toLowerCase());
-  if (!cmd) return;
-
-  if (!isOwner && config.rateLimit?.enabled && limited(sender)) return;
-  if (cmd.ownerOnly && !isOwner) return;
-  if (cmd.groupOnly && !isGroup) return ctx.reply('Group only command.');
-  if (cmd.adminOnly && !ctx.isAdmin) return ctx.reply('Admins only.');
-  if (cmd.adminOnly && !ctx.botIsAdmin) return ctx.reply('Make me admin first.');
-
-  if (config.autoRead) sock.readMessages([m.key]).catch(() => {});
-  if (config.autoTyping) sock.sendPresenceUpdate('composing', jid).catch(() => {});
-
-  await cmd.run(ctx);
-  if (config.autoTyping) sock.sendPresenceUpdate('paused', jid).catch(() => {});
-}
-
-// ── Shutdown ──
-// One shutdown path: stop the socket, save pending data, release the lock, then exit.
-// Heroku and Render allow about 30 seconds, so a hard exit timer is set as a backstop.
-let shuttingDown = false;
-async function shutdown() {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  console.log('Shutting down...');
-  setTimeout(() => process.exit(0), 10000).unref();
-  try { sock?.end(undefined); } catch {}
-  await db.flush().catch(() => {});
-  if (lockClient) {
-    try { await lockClient.query('SELECT pg_advisory_unlock($1)', [LOCK_ID]); } catch {}
-    try { lockClient.release(true); } catch {}
-  }
-  process.exit(0);
-}
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
-
-// Unexpected errors leave the process in an unknown state. Log the full stack and exit,
-// so the platform restarts the worker. The advisory lock keeps that restart safe.
-process.on('uncaughtException', (e) => {
-  console.error('uncaught:', e?.stack || e);
-  process.exit(1);
-});
-process.on('unhandledRejection', (e) => console.error('unhandled:', e?.stack || e?.message || e));
-
-start();
+  const c
