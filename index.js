@@ -515,29 +515,20 @@ async function handle(sock, m) {
   if (config.autoTyping) sock.sendPresenceUpdate('paused', jid).catch(() => {});
 }
 
-// Graceful shutdown: release the advisory lock explicitly, then exit.
-// Destroying the client (release(true)) also drops any lock Postgres still holds.
+// Graceful shutdown: stop the socket, save pending data, release the lock, then exit.
+// This is the only SIGTERM handler, so the order is always the same.
 let shuttingDown = false;
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log('Shutting down...');
   try { sock?.end(undefined); } catch {}
+  await db.flush().catch(() => {});
   if (lockClient) {
     try { await lockClient.query('SELECT pg_advisory_unlock($1)', [LOCK_ID]); } catch {}
     try { lockClient.release(true); } catch {}
   }
-  setTimeout(() => process.exit(0), 500);
+  process.exit(0);
 }
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
-
-// Unexpected errors leave the process in an unknown state, so log the full stack and exit.
-// The platform restarts the worker, and the single-instance lock keeps that restart safe.
-process.on('uncaughtException', (e) => {
-  console.error('uncaught:', e?.stack || e);
-  process.exit(1);
-});
-process.on('unhandledRejection', (e) => console.error('unhandled:', e?.stack || e?.message || e));
-
-start();
