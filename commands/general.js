@@ -2,7 +2,7 @@ const LINE = '──────────────';
 const MENU_IMAGE_PAGE = 'https://wa.me/message/FGI2ULZTWGCVL1';
 const MAX_MENU_IMAGE_BYTES = 5 * 1024 * 1024;
 const CATEGORIES = [
-  ['General', '🌐', ['menu', 'alive', 'ping', 'uptime', 'time', 'date', 'owner']],
+  ['General', '🌐', ['menu', 'alive', 'ping', 'uptime', 'time', 'date', 'owner', 'adst']],
   ['Group', '👥', ['kick', 'add', 'promote', 'demote', 'tagall', 'hidetag', 'admins', 'groupinfo', 'link', 'revoke', 'closegroup', 'opengroup', 'setname', 'setdesc', 'events', 'del', 'leave', 'gpic']],
   ['Tools', '🛠️', ['rank', 'settings', 'calc', 'reverse', 'say', 'weather', 'translate', 'define', 'wiki', 'qr', 'password', 'uuid', 'base64', 'hash', 'bmi', 'count']],
   ['AI', '🤖', ['ai', 'ask', 'chatgpt', 'adezai', 'gpt']],
@@ -131,6 +131,23 @@ module.exports = [
         console.warn('Owner picture unavailable; sending contact text:', error.message);
         await reply(ownerText);
       }
+    },
+  },
+  {
+    name: 'adst',
+    desc: 'Earn dollars by watching ads',
+    run: async ({ reply }) => {
+      const text = [
+        '💰 *Adselect - Earn Dollars Online*',
+        '',
+        'Adselect is a site where you earn dollars by watching ads and inviting your friends.',
+        '',
+        '🎁 Join now and get *$10 free*!',
+        '',
+        '🔗 Register here:',
+        'https://adselect.net/register?ref=arnoldadez',
+      ].join('\n');
+      await reply(text);
     },
   },
 ];
