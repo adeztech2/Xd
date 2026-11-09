@@ -113,11 +113,23 @@ module.exports = [
   { name: 'date', desc: 'Show today’s date', run: async ({ reply, config }) => reply(new Date().toLocaleDateString('en-GB', { timeZone: config.startupAlert?.timezone || 'UTC', dateStyle: 'full' })) },
   {
     name: 'owner',
-    desc: 'Show owner contact',
-    run: async ({ reply, config }) => {
-      const ownerNumber = (config.owner || process.env.OWNER_NUMBER || '254111783552').replace(/\D/g, '');
-      const ownerLink = `https://wa.me/${ownerNumber}`;
-      await reply(`Owner: ${ownerLink}`);
+    desc: 'Show owner contact and photo',
+    run: async ({ reply, sock, jid, m }) => {
+      const ownerText = [
+        '👨‍💻 Developer: Arnold Adez',
+        '📞 Contact 1: https://wa.me/254111783552',
+        '📞 Contact 2: https://wa.me/254101579396',
+        '',
+        'Appreciate Bot Owner 🤣',
+        'https://wa.me/message/FGI2ULZTWGCVL1',
+      ].join('\n');
+      try {
+        const image = await fetchMenuImage();
+        await sock.sendMessage(jid, { image, caption: ownerText }, { quoted: m });
+      } catch (error) {
+        console.warn('Owner picture unavailable; sending contact text:', error.message);
+        await reply(ownerText);
+      }
     },
   },
 ];
