@@ -23,6 +23,7 @@ const {
   fetchLatestBaileysVersion,
   Browsers,
   jidNormalizedUser,
+  makeCacheableSignalKeyStore,
 } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const pino = require('pino');
@@ -118,7 +119,7 @@ function buildStartupAlert(s) {
   const mode = config.publicMode ? 'Public' : 'Private';
 
   return [
-    `┌──「 *✨ ${config.botName}* 」`,
+    `┌──「 * ${config.botName}* 」`,
     `│ 🟢 Status   Online`,
     `│ 📱 Number   ${num(s.user.id)}`,
     `│ 🕒 Time     ${time}`,
@@ -263,6 +264,28 @@ async function clearSession() {
   }
 }
 
+// Deletes only the Signal encryption sessions (not the login). WhatsApp rebuilds them on the next
+// message. Fixes "Waiting for this message" caused by sessions that no longer match the phone's.
+// Run it once by setting RESET_SIGNAL=1, redeploy, then remove the variable.
+let signalReset = false;
+async function resetSignalSessions() {
+  if (signalReset || process.env.RESET_SIGNAL !== '1') return;
+  signalReset = true;
+  if (pool) {
+    const r = await pool.query(
+      "DELETE FROM auth_state WHERE id LIKE $1 AND (id LIKE $2 OR id LIKE $3 OR id LIKE $4)",
+      [`${STORE_KEY}:%`, `${STORE_KEY}:session-%`, `${STORE_KEY}:sender-key-%`, `${STORE_KEY}:sender-key-memory-%`]
+    );
+    console.log(`RESET_SIGNAL: removed ${r.rowCount} saved encryption sessions. Remove RESET_SIGNAL from the config vars.`);
+  } else if (fs.existsSync(config.sessionDir)) {
+    let n = 0;
+    for (const f of fs.readdirSync(config.sessionDir)) {
+      if (/^(session|sender-key|sender-key-memory)-/.test(f)) { fs.rmSync(path.join(config.sessionDir, f)); n++; }
+    }
+    console.log(`RESET_SIGNAL: removed ${n} saved encryption sessions. Remove RESET_SIGNAL from the variables.`);
+  }
+}
+
 async function start() {
   if (starting) return; // never run two start() calls at once
   if (replaced || halted || shuttingDown) return; // another copy owns this session, or WhatsApp rejected it
@@ -293,6 +316,8 @@ async function start() {
     await withTimeout(importSession(), STARTUP_STEP_MS, 'session import');
     console.log(pool ? 'Session storage: Postgres' : 'Session storage: LOCAL files (lost on every redeploy!)');
 
+    await withTimeout(resetSignalSessions(), STARTUP_STEP_MS, 'signal reset');
+
     const { state, saveCreds } = pool
       ? await usePgAuthState(pool, STORE_KEY)
       : await useMultiFileAuthState(config.sessionDir);
@@ -305,10 +330,13 @@ async function start() {
 
     const { version } = await withTimeout(fetchLatestBaileysVersion(), STARTUP_STEP_MS, 'version check');
 
+    const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
     const s = makeWASocket({
       version,
-      logger: pino({ level: 'silent' }),
-      auth: state,
+      // 'warn' keeps decrypt / Bad MAC / retry problems visible in the logs (set LOG_LEVEL to change)
+      logger,
+      // cached keys: far fewer database reads per message, so replies are faster and consistent
+      auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
       browser: Browsers.ubuntu('Chrome'),
       markOnlineOnConnect: false,
       syncFullHistory: false,
@@ -316,6 +344,8 @@ async function start() {
       // lets WhatsApp re-request messages the other side could not decrypt
       getMessage: async (key) => sentCache.get(key.id) || cache.get(key.id)?.message || undefined,
       msgRetryCounterCache: retryCache,
+      maxMsgRetryCount: 5,
+      retryRequestDelayMs: 250,
       // faster group sends, but only with metadata that is still fresh
       cachedGroupMetadata: async (jid) => {
         const hit = metaCache.get(jid);
@@ -476,198 +506,4 @@ function throttleSend(s) {
         const res = await orig(...a);
         if (res?.key?.id && res.message) {
           sentCache.set(res.key.id, res.message);
-          if (sentCache.size > MAX_SENT) sentCache.delete(sentCache.keys().next().value);
-        }
-        return res;
-      });
-    chain = p.catch(() => {});
-    return p;
-  };
-}
-
-const hits = new Map();
-function limited(sender) {
-  const { window, maxRequests } = config.rateLimit;
-  const now = Date.now();
-  const arr = (hits.get(sender) || []).filter((t) => now - t < window);
-  arr.push(now);
-  hits.set(sender, arr);
-  return arr.length > maxRequests;
-}
-
-// Drop rate-limit history older than the window, so memory does not grow forever
-setInterval(() => {
-  const now = Date.now();
-  const window = config.rateLimit?.window || 60000;
-  for (const [sender, times] of hits) {
-    const recent = times.filter((t) => now - t < window);
-    if (recent.length) hits.set(sender, recent);
-    else hits.delete(sender);
-  }
-}, 60000).unref();
-
-const metaCache = new Map();
-async function getMeta(s, jid) {
-  const hit = metaCache.get(jid);
-  if (hit && Date.now() - hit.t < GROUP_META_TTL) return hit.meta;
-  const meta = await s.groupMetadata(jid);
-  metaCache.set(jid, { meta, t: Date.now() });
-  return meta;
-}
-
-async function handle(sock, m) {
-  if (!m.message) return;
-  const jid = m.key.remoteJid;
-
-  // Auto-view status
-  if (jid === 'status@broadcast') {
-    if (config.autoStatusView) await sock.readMessages([m.key]).catch(() => {});
-    if (config.autoStatusReact?.enabled && !m.key.fromMe && m.key.participant) {
-      const delay = 2000 + Math.random() * 3000;
-      setTimeout(() => {
-        sock
-          .sendMessage(
-            'status@broadcast',
-            { react: { key: m.key, text: config.autoStatusReact.emoji } },
-            { statusJidList: [m.key.participant, jidNormalizedUser(sock.user.id)] }
-          )
-          .catch(() => {});
-      }, delay);
-    }
-    return;
-  }
-
-  // Anti-delete
-  const proto = m.message.protocolMessage;
-  if (proto && proto.type === 0) {
-    const orig = cache.get(proto.key?.id);
-    // Skip when no owner is configured, so we never send to an invalid JID
-    if (config.antiDelete && config.owner && orig && !orig.key.fromMe) {
-      const ownerJid = config.owner + '@s.whatsapp.net';
-      const who = orig.key.participant || orig.key.remoteJid;
-      await sock.sendMessage(ownerJid, {
-        text: `🚨 *Anti-Delete*\n👤 @${num(who)}\n💬 ${jid}`,
-        mentions: [who],
-      }).catch((e) => console.error('anti-delete alert failed:', e.message));
-      await sock.sendMessage(ownerJid, { forward: orig }).catch(() => {});
-    }
-    return;
-  }
-
-  cache.set(m.key.id, m);
-  if (cache.size > MAX_CACHE) cache.delete(cache.keys().next().value);
-
-  const msg = unwrap(m.message);
-  const body =
-    msg.conversation ||
-    msg.extendedTextMessage?.text ||
-    msg.imageMessage?.caption ||
-    msg.videoMessage?.caption ||
-    '';
-
-  const prefix = config.prefix.find((p) => body.startsWith(p));
-  const [cmdName, ...args] = prefix ? body.slice(prefix.length).trim().split(/\s+/) : [];
-
-  const isGroup = jid.endsWith('@g.us');
-  const sender = isGroup ? m.key.participant : jid;
-  const isOwner = m.key.fromMe || num(sender) === config.owner;
-  const ci = msg.extendedTextMessage?.contextInfo;
-
-  const ctx = {
-    sock, m, jid, sender, isGroup, isOwner, args, body, db,
-    text: args.join(' '),
-    prefix, list, config, num,
-    mentioned: ci?.mentionedJid || [],
-    quotedSender: ci?.participant,
-    quotedMsg: ci?.quotedMessage,
-    reply: (text, opts = {}) => sock.sendMessage(jid, { text, ...opts }, { quoted: brandQuote(sock, m) }),
-    group: {
-      kick: (u) => sock.groupParticipantsUpdate(jid, [u], 'remove'),
-      promote: (u) => sock.groupParticipantsUpdate(jid, [u], 'promote'),
-      demote: (u) => sock.groupParticipantsUpdate(jid, [u], 'demote'),
-      members: async () => (await getMeta(sock, jid)).participants.map((p) => p.id),
-    },
-  };
-
-  if (isGroup) {
-    try {
-      ctx.meta = await getMeta(sock, jid);
-      const admins = ctx.meta.participants.filter((p) => p.admin).map((p) => jidNormalizedUser(p.id));
-      ctx.isAdmin = admins.includes(jidNormalizedUser(sender)) || isOwner;
-      ctx.botIsAdmin = admins.includes(jidNormalizedUser(sock.user.id));
-    } catch (e) {
-      ctx.isAdmin = isOwner;
-      ctx.botIsAdmin = false;
-    }
-  }
-
-  // Access gate: in private mode, strangers get nothing (no plugins, no commands)
-  if (!config.publicMode && !isOwner) return;
-
-  // ── Plugin hooks (run for allowed users, except the bot's own messages) ──
-  if (!m.key.fromMe) {
-    for (const p of plugins) {
-      if (p.events?.message) await p.events.message(ctx, { db }).catch((e) => console.error(`[${p.name}]`, e.message));
-    }
-  }
-
-  // ── Commands ──
-  const cmd = commands.get((cmdName || '').toLowerCase());
-  if (!cmd) return;
-
-  if (!isOwner && config.rateLimit?.enabled && limited(sender)) return;
-  if (cmd.ownerOnly && !isOwner) return;
-  if (cmd.groupOnly && !isGroup) return ctx.reply('Group only command.');
-  if (cmd.adminOnly && !ctx.isAdmin) return ctx.reply('Admins only.');
-  if (cmd.adminOnly && !ctx.botIsAdmin) return ctx.reply('Make me admin first.');
-
-  if (config.autoRead) sock.readMessages([m.key]).catch(() => {});
-  if (config.autoTyping) sock.sendPresenceUpdate('composing', jid).catch(() => {});
-
-  await cmd.run(ctx);
-  if (config.autoTyping) sock.sendPresenceUpdate('paused', jid).catch(() => {});
-}
-
-// ── Shutdown ──
-// One shutdown path: stop the socket, save pending data, release the lock, then exit.
-// Heroku and Render allow about 30 seconds, so a hard exit timer is set as a backstop.
-async function shutdown() {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  console.log('Shutting down...');
-  setTimeout(() => process.exit(0), 10000).unref();
-  clearInterval(lockTimer);
-  endSocket();
-  await db.flush().catch(() => {});
-  if (lockClient) {
-    try { await lockClient.query('SELECT pg_advisory_unlock($1)', [LOCK_ID]); } catch {}
-    try { lockClient.release(true); } catch {}
-  }
-  process.exit(0);
-}
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
-
-// Unexpected errors leave the process in an unknown state. Log the stack and exit,
-// so the platform restarts the worker. The advisory lock keeps that restart safe.
-process.on('uncaughtException', (e) => {
-  console.error('uncaught:', e?.stack || e);
-  process.exit(1);
-});
-
-// Baileys sends internal retry requests on sockets that may already be closed. Those
-// rejections ("Connection Closed") are harmless, so they are logged once and not as errors.
-let closedNoticeShown = false;
-process.on('unhandledRejection', (e) => {
-  const message = e?.message || String(e);
-  if (message === 'Connection Closed') {
-    if (!closedNoticeShown) {
-      closedNoticeShown = true;
-      console.log('Ignored a retry on a closed WhatsApp connection (harmless).');
-    }
-    return;
-  }
-  console.error('unhandled:', e?.stack || message);
-});
-
-start();
+          if (
