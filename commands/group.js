@@ -25,9 +25,11 @@ function memberAction(action, label) {
   return safe(async (ctx) => {
     const user = target(ctx);
     if (!user) return ctx.reply('Mention or reply to a member, or provide their full number with country code.');
-    if (digits(user) === digits(ctx.sock.user?.id)) return ctx.reply('I cannot apply that action to myself.');
     const meta = await getMeta(ctx);
-    const member = meta.participants.find((item) => digits(item.id) === digits(user));
+    const same = (item) => [item.id, item.lid, item.phoneNumber].some((x) => x && digits(x) === digits(user));
+    const member = meta.participants.find(same);
+    const me = [ctx.sock.user?.id, ctx.sock.user?.lid].filter(Boolean).map(digits);
+    if (member && [member.id, member.lid, member.phoneNumber].some((x) => x && me.includes(digits(x)))) return ctx.reply('I cannot apply that action to myself.');
     if (!member) return ctx.reply('That user is not in this group.');
     if (action === 'remove' && member.admin && !ctx.isOwner) return ctx.reply('I will not remove another group admin.');
     const result = await ctx.sock.groupParticipantsUpdate(ctx.jid, [member.id], action);
@@ -116,3 +118,4 @@ module.exports = [
   },
 ];
                                                                                                                                                                                                                                           
+   
