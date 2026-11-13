@@ -1,34 +1,47 @@
 // Adez AI commands. Replace commands/ai.js with this file.
 //
-// Provider order for most commands:
-//   OPENAI_API_KEY set  -> OpenAI (model: OPENAI_MODEL, default gpt-4o-mini)
-//   GEMINI_API_KEY set  -> Google Gemini (model: GEMINI_MODEL, default gemini-2.5-flash)
-//   neither set         -> free public endpoint (best effort, may be slow)
+// General commands (.ai, .explain, .poem, ...) use the first provider that is configured:
+//   OPENAI_API_KEY  -> OpenAI (OPENAI_MODEL, default gpt-4o-mini)
+//   GEMINI_API_KEY  -> Google Gemini (GEMINI_MODEL, default gemini-2.5-flash)
+//   otherwise       -> Keith AI (KEITH_AI_URL, or KEITH_API_BASE + /keithai)
 // .gemini always uses GEMINI_API_KEY.
+// Keith model commands (.claude, .mistral, ...) always use KEITH_API_BASE.
 
 const MAX_INPUT_CHARS = 2000;
 const MAX_REPLY_CHARS = 3500;
 const TIMEOUT_MS = 45000;
 
+const DEFAULT_KEITH_API_BASE = 'https://keithhostdeploysite-22l75uk5-ff0ccc337078.herokuapp.com';
+
 const BASE_SYSTEM =
   'You are Adez AI, a helpful, friendly assistant replying in WhatsApp. Be concise, use plain text, and do not claim to be human.';
 
-// ---------- providers ----------
+// ---------- helpers ----------
 
 function clip(text) {
   return String(text || '').trim().slice(0, MAX_REPLY_CHARS);
 }
 
-async function askFree(system, prompt) {
-  const url = `https://text.pollinations.ai/${encodeURIComponent(prompt)}?system=${encodeURIComponent(system)}`;
-  const response = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
-  if (!response.ok) {
-    throw new Error('The free AI service is busy. Try again later, or set OPENAI_API_KEY for reliable answers.');
-  }
-  const answer = clip(await response.text());
+// Keith endpoints take only a question (?q=), so instructions are added to the question.
+function withSystem(system, prompt) {
+  return system ? `${system}\n\n${prompt}` : prompt;
+}
+
+// Reads the answer from the common Keith response shapes.
+function extractKeithText(data) {
+  if (data?.status === false) throw new Error('The AI service could not answer that. Try rephrasing.');
+  const raw = data?.result ?? data?.message ?? data?.response ?? data?.answer ?? data?.data;
+  const text = typeof raw === 'string' ? raw : raw?.text || raw?.message || raw?.content || '';
+  const answer = clip(text);
   if (!answer) throw new Error('The AI service returned an empty answer.');
   return answer;
 }
+
+function keithBase() {
+  return ((process.env.KEITH_API_BASE || '').trim() || DEFAULT_KEITH_API_BASE).replace(/\/+$/, '');
+}
+
+// ---------- providers ----------
 
 async function askOpenAI(system, prompt, apiKey) {
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -44,7 +57,7 @@ async function askOpenAI(system, prompt, apiKey) {
         { role: 'system', content: system },
         { role: 'user', content: prompt },
       ],
-      max_tokens: 700,
+      max_tokens: 900,
     }),
   });
 
@@ -77,7 +90,12 @@ async function askGemini(system, prompt) {
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: 700 },
+      generationConfig: {
+        maxOutputTokens: 2048,
+        // Turn off hidden "thinking" so the budget goes to the visible answer.
+        // If Google returns an error about this setting, remove the thinkingConfig line.
+        thinkingConfig: { thinkingBudget: 0 },
+      },
     }),
   });
 
@@ -93,23 +111,60 @@ async function askGemini(system, prompt) {
   }
 
   const data = await response.json();
-  const answer = clip(
-    (data.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('')
-  );
+  const answer = clip((data.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join(''));
   if (!answer) {
-    throw new Error('Gemini returned an empty answer. It may have been blocked by its safety filters.');
+    const reason = data.candidates?.[0]?.finishReason || data.promptFeedback?.blockReason || 'unknown';
+    throw new Error(`Gemini returned no text (reason: ${reason}). Try rephrasing.`);
   }
   return answer;
+}
+
+// Calls any Keith endpoint on the Keith base with the given query parameters.
+async function askKeithModel(path, params) {
+  const response = await fetch(`${keithBase()}${path}?${new URLSearchParams(params).toString()}`, {
+    headers: { 'User-Agent': 'adez-xmd-bot' },
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`The AI service returned HTTP ${response.status}.`);
+  return extractKeithText(await response.json());
+}
+
+// General Keith endpoint. KEITH_AI_URL overrides the default /keithai path if you set it.
+async function askKeith(system, prompt) {
+  const q = withSystem(system, prompt);
+  const full = (process.env.KEITH_AI_URL || '').trim();
+  if (full) {
+    const sep = full.includes('?') ? '&' : '?';
+    const response = await fetch(`${full}${sep}q=${encodeURIComponent(q)}`, {
+      headers: { 'User-Agent': 'adez-xmd-bot' },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error(`Keith AI returned HTTP ${response.status}.`);
+    return extractKeithText(await response.json());
+  }
+  return askKeithModel('/keithai', { q });
 }
 
 async function askAuto(system, prompt) {
   if (process.env.OPENAI_API_KEY) return askOpenAI(system, prompt, process.env.OPENAI_API_KEY);
   if (process.env.GEMINI_API_KEY) return askGemini(system, prompt);
-  return askFree(system, prompt);
+  return askKeith(system, prompt);
 }
 
 // ---------- command specs ----------
-// prepare(text) returns { system, prompt } or null when the input is missing or invalid.
+// prepare(text) returns a job or null when the input is missing or invalid.
+// A job is { system, prompt } for general providers, or { params } for Keith model endpoints.
+// Command names are unique across the project. "joke" belongs to fun.js and "translate" to tools.js.
+
+const KEITH_MODEL = (name, path, desc, example, alias = []) => ({
+  name,
+  alias,
+  desc,
+  usage: '<question>',
+  example,
+  path,
+  prepare: (t) => (t ? { params: { q: withSystem(BASE_SYSTEM, t) } } : null),
+});
 
 const SPECS = [
   {
@@ -129,6 +184,39 @@ const SPECS = [
     provider: 'gemini',
     prepare: (t) => (t ? { system: BASE_SYSTEM, prompt: t } : null),
   },
+
+  // ----- Keith model endpoints -----
+  KEITH_MODEL('claudeai', '/ai/claudeai', 'Ask Claude (via Keith)', 'what is a black hole', ['claude']),
+  KEITH_MODEL('mistral', '/ai/mistral', 'Ask Mistral (via Keith)', 'name three uses for baking soda', ['mistralai']),
+  KEITH_MODEL('copilot', '/ai/copilot', 'Ask Copilot (via Keith)', 'how do I center a div'),
+  KEITH_MODEL('perplexity', '/ai/perplexity', 'Ask Perplexity (via Keith)', 'latest news on solar power', ['pplx']),
+  KEITH_MODEL('venice', '/ai/venice', 'Ask Venice AI (via Keith)', 'write a short thank you note'),
+  KEITH_MODEL('o3', '/ai/o3', 'Ask the o3 model (via Keith)', 'solve 17 times 23'),
+  KEITH_MODEL('chatgpt4', '/ai/chatgpt4', 'Ask ChatGPT-4 (via Keith)', 'give me a study plan for exams', ['gpt4']),
+  KEITH_MODEL('deepseek', '/ai/deepseekr', 'Ask DeepSeek (via Keith)', 'explain recursion simply', ['deepseekr']),
+  KEITH_MODEL('metai', '/ai/metai', 'Ask Meta AI (via Keith)', 'hi'),
+  {
+    name: 'lyricsai',
+    alias: ['songai'],
+    desc: 'Write song lyrics on a topic (via Keith)',
+    usage: '<topic>',
+    example: 'heartbreak',
+    path: '/ai/lyricsgen',
+    prepare: (t) =>
+      t
+        ? {
+            params: {
+              topic: t,
+              genre: 'pop',
+              mood: 'emotional',
+              structure: 'verse_chorus_bridge',
+              language: 'en',
+            },
+          }
+        : null,
+  },
+
+  // ----- Prompt-style commands (general providers) -----
   {
     name: 'explain',
     alias: ['explainit'],
@@ -138,8 +226,7 @@ const SPECS = [
     prepare: (t) =>
       t
         ? {
-            system:
-              'Explain the topic simply, as if to a curious beginner. Use short paragraphs and one everyday example. Plain text only.',
+            system: 'Explain the topic simply, as if to a curious beginner. Use short paragraphs and one everyday example. Plain text only.',
             prompt: t,
           }
         : null,
@@ -159,9 +246,9 @@ const SPECS = [
         : null,
   },
   {
-    name: 'translate',
-    alias: ['tr'],
-    desc: 'Translate text into a language',
+    name: 'aitranslate',
+    alias: ['trai'],
+    desc: 'Translate text with AI',
     usage: '<language> <text>',
     example: 'french Good morning, how are you?',
     prepare: (t) => {
@@ -197,8 +284,7 @@ const SPECS = [
     prepare: (t) =>
       t
         ? {
-            system:
-              'You are a careful programmer. Give working code in one fenced code block, then a short explanation of 1 to 3 lines.',
+            system: 'You are a careful programmer. Give working code in one fenced code block, then a short explanation of 1 to 3 lines.',
             prompt: t,
           }
         : null,
@@ -223,17 +309,6 @@ const SPECS = [
     prepare: (t) => ({
       system: 'Write an original poem of 8 to 12 lines. Plain text. Do not reproduce existing song lyrics or copyrighted poems.',
       prompt: t || 'Write a poem about hope.',
-    }),
-  },
-  {
-    name: 'joke',
-    alias: ['funny'],
-    desc: 'Tell a short clean joke',
-    usage: '[topic]',
-    example: 'cats',
-    prepare: (t) => ({
-      system: 'Tell one short, clean, original joke. Plain text, no preamble.',
-      prompt: t ? `Topic: ${t}` : 'Tell me a joke.',
     }),
   },
   {
@@ -268,10 +343,14 @@ async function runCommand(spec, ctx) {
   }
 
   try {
-    const answer =
-      spec.provider === 'gemini'
-        ? await askGemini(job.system, job.prompt)
-        : await askAuto(job.system, job.prompt);
+    let answer;
+    if (spec.path) {
+      answer = await askKeithModel(spec.path, job.params);
+    } else if (spec.provider === 'gemini') {
+      answer = await askGemini(job.system, job.prompt);
+    } else {
+      answer = await askAuto(job.system, job.prompt);
+    }
     await ctx.reply(answer);
   } catch (error) {
     const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
