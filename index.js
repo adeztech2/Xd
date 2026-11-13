@@ -107,7 +107,6 @@ function detectHost() {
 
 // Startup message text sent to the bot's own chat when it connects
 function buildStartupAlert(s) {
-  const LINE = '──────────────';
   const tz = config.startupAlert?.timezone || 'UTC';
   const time = new Date().toLocaleString('en-GB', {
     timeZone: tz,
@@ -119,18 +118,24 @@ function buildStartupAlert(s) {
   const mode = config.publicMode ? 'Public' : 'Private';
 
   return [
-    `┌──「 *✨ ${config.botName}* 」`,
-    `│ 🟢 Status   Online`,
-    `│ 📱 Number   ${num(s.user.id)}`,
-    `│ 🕒 Time     ${time}`,
-    `│ 🌍 Host     ${detectHost()}`,
-    `│ ⚙️ Mode     ${mode}`,
-    `│ ⌨️ Prefix   ${prefix}`,
-    `│ 🧩 Version  v${version}`,
-    `│ 🟢 Node     ${process.version}`,
-    `└${LINE}`,
+    `┏━━━━━━━━━━━━━━━━━━━━┓`,
+    `┃   ⚡ ${config.botName} ⚡`,
+    `┃   𝗖𝗼𝗻𝗻𝗲𝗰𝘁𝗲𝗱 𝘀𝘂𝗰𝗰𝗲𝘀𝘀𝗳𝘂𝗹𝗹𝘆`,
+    `┗━━━━━━━━━━━━━━━━━━━━┛`,
     '',
-    `Type ${prefix}menu to get started.`,
+    `◈ Status   ➜ Online 🟢`,
+    `◈ Number   ➜ ${num(s.user.id)}`,
+    `◈ Time     ➜ ${time}`,
+    `◈ Host     ➜ ${detectHost()}`,
+    `◈ Mode     ➜ ${mode}`,
+    `◈ Prefix   ➜ ${prefix}`,
+    `◈ Version  ➜ v${version}`,
+    '',
+    `▸ Type ${prefix}menu to begin`,
+    `▸ Fast • Secure • Always On`,
+    '',
+    `━━━━━━━━━━━━━━━━━━━━`,
+    `POWERED BY ADEZ TECH`,
   ].join('\n');
 }
 
@@ -629,75 +634,4 @@ async function handle(sock, m) {
       ctx.isAdmin = isOwner;
       ctx.botIsAdmin = false;
     }
-  }
-
-  // Access gate: in private mode, strangers get nothing (no plugins, no commands)
-  if (!config.publicMode && !isOwner) return;
-
-  // ── Plugin hooks (run for allowed users, except the bot's own messages) ──
-  if (!m.key.fromMe) {
-    for (const p of plugins) {
-      if (p.events?.message) await p.events.message(ctx, { db }).catch((e) => console.error(`[${p.name}]`, e.message));
     }
-  }
-
-  // ── Commands ──
-  const cmd = commands.get((cmdName || '').toLowerCase());
-  if (!cmd) return;
-
-  if (!isOwner && config.rateLimit?.enabled && limited(sender)) return;
-  if (cmd.ownerOnly && !isOwner) return;
-  if (cmd.groupOnly && !isGroup) return ctx.reply('Group only command.');
-  if (cmd.adminOnly && !ctx.isAdmin) return ctx.reply('Admins only.');
-  if (cmd.adminOnly && !ctx.botIsAdmin) return ctx.reply('Make me admin first.');
-
-  if (config.autoRead) sock.readMessages([m.key]).catch(() => {});
-  if (config.autoTyping) sock.sendPresenceUpdate('composing', jid).catch(() => {});
-
-  await cmd.run(ctx);
-  if (config.autoTyping) sock.sendPresenceUpdate('paused', jid).catch(() => {});
-}
-
-// ── Shutdown ──
-// One shutdown path: stop the socket, save pending data, release the lock, then exit.
-// Heroku and Render allow about 30 seconds, so a hard exit timer is set as a backstop.
-async function shutdown() {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  console.log('Shutting down...');
-  setTimeout(() => process.exit(0), 10000).unref();
-  clearInterval(lockTimer);
-  endSocket();
-  await db.flush().catch(() => {});
-  if (lockClient) {
-    try { await lockClient.query('SELECT pg_advisory_unlock($1)', [LOCK_ID]); } catch {}
-    try { lockClient.release(true); } catch {}
-  }
-  process.exit(0);
-}
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
-
-// Unexpected errors leave the process in an unknown state. Log the stack and exit,
-// so the platform restarts the worker. The advisory lock keeps that restart safe.
-process.on('uncaughtException', (e) => {
-  console.error('uncaught:', e?.stack || e);
-  process.exit(1);
-});
-
-// Baileys sends internal retry requests on sockets that may already be closed. Those
-// rejections ("Connection Closed") are harmless, so they are logged once and not as errors.
-let closedNoticeShown = false;
-process.on('unhandledRejection', (e) => {
-  const message = e?.message || String(e);
-  if (message === 'Connection Closed') {
-    if (!closedNoticeShown) {
-      closedNoticeShown = true;
-      console.log('Ignored a retry on a closed WhatsApp connection (harmless).');
-    }
-    return;
-  }
-  console.error('unhandled:', e?.stack || message);
-});
-
-start();
