@@ -4,7 +4,7 @@ const owner = (process.env.OWNER_NUMBER || '').replace(/\D/g, '');
 const prefixEnv = (process.env.PREFIX || '').trim();
 
 module.exports = {
-  botName: process.env.BOT_NAME || 'ADEZ XMD',
+  botName: process.env.BOT_NAME || 'ADEZ MD',
   prefix: prefixEnv ? [prefixEnv] : ['.', '!', '/'],
   owner,
   pairNumber: (process.env.PAIR_NUMBER || owner).replace(/\D/g, ''),
@@ -33,6 +33,7 @@ module.exports = {
   antiDelete: true,
   antiEdit: true,
   antiLink: { enabled: true, action: 'kick', whitelist: ['youtube.com', 'youtu.be'] },
+  warnLimit: 3,
   antiBadword: { enabled: true, action: 'delete', words: ['spam'] },
 
   welcome: true,
