@@ -1,4 +1,4 @@
-const { getGroups, categoryBox, mainText, fullText, numberedText, remember, sendCard } = require('../lib/menu');
+const { getGroups, categoryBox, mainText, fullText, numberedText, remember, sendCard, sendButtonMenu } = require('../lib/menu');
 
 module.exports = [
   {
@@ -10,7 +10,12 @@ module.exports = [
         const hit = sections.find((s) => s.title.toLowerCase() === wanted);
         return ctx.reply(hit ? categoryBox(hit) : `No category "${wanted}". Try: ${sections.map((s) => s.title.toLowerCase()).join(', ')}`);
       }
-      await sendCard(ctx, mainText(ctx, sections), [ctx.sender]);
+      const text = mainText(ctx, sections);
+      if (process.env.MENU_BUTTONS !== 'off') {
+        try { return await sendButtonMenu(ctx, text, sections, [ctx.sender]); }
+        catch (e) { console.error('button menu failed, sending text menu:', e && e.message); }
+      }
+      await sendCard(ctx, text, [ctx.sender]);
     },
   },
   {
