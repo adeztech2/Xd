@@ -108,31 +108,10 @@ module.exports = [
     },
   },
   { name: 'alive', desc: 'Check whether bot is online', run: async ({ reply, config }) => reply(`${config.botName} is online.\nUptime: ${uptime()}`) },
-  { name: 'ping', desc: 'Check response time', run: async ({ reply, m }) => { const sent = Number(m.messageTimestamp) * 1000; await reply(`Speed: ${sent ? Math.max(0, Date.now() - sent) : 0} ms`); } },
+  { name: 'ping', desc: 'Check response time', run: async ({ reply, m, config }) => { const sent = Number(m.messageTimestamp) * 1000; await reply(`${config.botName} speed\n\n${sent ? Math.max(0, Date.now() - sent) : 0} ms`); } },
   { name: 'uptime', desc: 'Show uptime', run: async ({ reply }) => reply(`Uptime: ${uptime()}`) },
   { name: 'time', desc: 'Show current time', run: async ({ reply, config }) => reply(new Date().toLocaleString('en-GB', { timeZone: config.startupAlert?.timezone || 'UTC' })) },
   { name: 'date', desc: 'Show today’s date', run: async ({ reply, config }) => reply(new Date().toLocaleDateString('en-GB', { timeZone: config.startupAlert?.timezone || 'UTC', dateStyle: 'full' })) },
-  {
-    name: 'owner',
-    desc: 'Show owner contact and photo',
-    run: async ({ reply, sock, jid, m }) => {
-      const ownerText = [
-        '👨‍💻 Developer: Arnold Adez',
-        '📞 Contact 1: https://wa.me/254111783552',
-        '📞 Contact 2: https://wa.me/254101579396',
-        '',
-        'Appreciate Bot Owner 🤣',
-        'https://wa.me/message/FGI2ULZTWGCVL1',
-      ].join('\n');
-      try {
-        const image = await fetchMenuImage();
-        await sock.sendMessage(jid, { image, caption: ownerText }, { quoted: m });
-      } catch (error) {
-        console.warn('Owner picture unavailable; sending contact text:', error.message);
-        await reply(ownerText);
-      }
-    },
-  },
   {
     name: 'adst',
     desc: 'Earn dollars by watching ads',
