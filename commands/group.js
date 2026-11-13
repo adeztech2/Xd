@@ -1,4 +1,4 @@
-const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
+const downloadContentFromMessage = (...a) => require('../lib/baileys').baileys().downloadContentFromMessage(...a);
 const digits = (jid) => String(jid || '').split('@')[0].split(':')[0];
 
 function target(ctx) {
@@ -115,3 +115,4 @@ module.exports = [
     }),
   },
 ];
+                                                                                                                                                                                                                                          
