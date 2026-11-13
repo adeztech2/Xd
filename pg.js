@@ -5,7 +5,7 @@ const { Pool } = require('pg');
 // Built-in fallback so any host (Render, Heroku, Railway, VPS) works without setting the variable.
 // A DATABASE_URL set on the host always wins over this. Password's "$" is encoded as %24.
 const DEFAULT_DATABASE_URL =
-  'postgresql://postgres:x9s%24UkDdyPG5PpR@db.wfrwvcqkdnkurainsogk.supabase.co:5432/postgres';
+  'postgresql://postgres.wfrwvcqkdnkurainsogk:x9s%24UkDdyPG5PpR@aws-0-eu-west-1.pooler.supabase.com:5432/postgres';
 const url = process.env.DATABASE_URL || DEFAULT_DATABASE_URL;
 const pool = url
   ? new Pool({
