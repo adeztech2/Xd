@@ -10,7 +10,7 @@ module.exports = [
         const hit = sections.find((s) => s.title.toLowerCase() === wanted);
         return ctx.reply(hit ? categoryBox(hit) : `No category "${wanted}". Try: ${sections.map((s) => s.title.toLowerCase()).join(', ')}`);
       }
-      await sendCard(ctx, mainText(ctx, sections));
+      await sendCard(ctx, mainText(ctx, sections), [ctx.sender]);
     },
   },
   {
