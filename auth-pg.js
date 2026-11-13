@@ -1,7 +1,8 @@
 // WhatsApp session stored in Postgres (same job as useMultiFileAuthState, but survives restarts).
-const { initAuthCreds, BufferJSON, proto } = require('@whiskeysockets/baileys');
+const { baileys } = require('./lib/baileys');
 
 async function usePgAuthState(pool, sessionId = 'main') {
+  const { initAuthCreds, BufferJSON, proto } = baileys(); // loaded by index.js before this runs
   const id = (k) => `${sessionId}:${k}`;
 
   const write = (k, v) =>
