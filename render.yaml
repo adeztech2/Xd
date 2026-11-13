@@ -13,7 +13,7 @@ services:
       - key: SESSION_ID
         sync: false
       - key: DATABASE_URL
-        value: postgresql://postgres.wfrwvcqkdnkurainsogk:x9s%24UkDdyPG5PpR@aws-0-eu-west-1.pooler.supabase.com:5432/postgres
+        value: postgresql://postgres:[x9s$UkDdyPG5PpR]@db.wfrwvcqkdnkurainsogk.supabase.co:5432/postgres
       - key: OWNER_NUMBER
         sync: false
       - key: MODE
