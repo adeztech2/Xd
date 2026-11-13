@@ -16,15 +16,8 @@ for (const method of ['log', 'info', 'warn', 'debug']) {
   };
 }
 
-const {
-  default: makeWASocket,
-  useMultiFileAuthState,
-  DisconnectReason,
-  fetchLatestBaileysVersion,
-  Browsers,
-  jidNormalizedUser,
-  makeCacheableSignalKeyStore,
-} = require('@whiskeysockets/baileys');
+const { loadBaileys } = require('./lib/baileys');
+const { jidNormalizedUser } = require('./lib/jid');
 const { Boom } = require('@hapi/boom');
 const pino = require('pino');
 const fs = require('fs');
@@ -209,6 +202,12 @@ async function start() {
     console.log(pool ? 'Session storage: Postgres' : 'Session storage: LOCAL files (lost on every redeploy!)');
 
     await withTimeout(resetSignalSessions(), STARTUP_STEP_MS, 'signal reset');
+
+    // Baileys 7 is an ES module, so it is loaded here with import()
+    const {
+      makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion,
+      Browsers, makeCacheableSignalKeyStore,
+    } = await loadBaileys();
 
     const { state, saveCreds } = pool
       ? await usePgAuthState(pool, STORE_KEY)
@@ -426,4 +425,4 @@ process.on('unhandledRejection', (e) => {
 
 start();
 
-          
+                                
