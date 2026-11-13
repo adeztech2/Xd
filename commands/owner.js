@@ -1,5 +1,6 @@
 // Owner-only controls. Every change is saved, so it survives restarts (see lib/runtime.js).
-const { downloadContentFromMessage, jidNormalizedUser } = require('@whiskeysockets/baileys');
+const downloadContentFromMessage = (...a) => require('../lib/baileys').baileys().downloadContentFromMessage(...a);
+const { jidNormalizedUser } = require('../lib/jid');
 const db = require('../db');
 const { FLAG_PATHS, setPath, saveFlag } = require('../lib/runtime');
 
@@ -137,3 +138,4 @@ module.exports = [
     }),
   },
 ];
+                                                                                     
