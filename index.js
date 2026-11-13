@@ -119,7 +119,7 @@ function buildStartupAlert(s) {
   const mode = config.publicMode ? 'Public' : 'Private';
 
   return [
-    `┌──「 * ${config.botName}* 」`,
+    `┌──「 *✨ ${config.botName}* 」`,
     `│ 🟢 Status   Online`,
     `│ 📱 Number   ${num(s.user.id)}`,
     `│ 🕒 Time     ${time}`,
@@ -506,4 +506,198 @@ function throttleSend(s) {
         const res = await orig(...a);
         if (res?.key?.id && res.message) {
           sentCache.set(res.key.id, res.message);
-          if (
+          if (sentCache.size > MAX_SENT) sentCache.delete(sentCache.keys().next().value);
+        }
+        return res;
+      });
+    chain = p.catch(() => {});
+    return p;
+  };
+}
+
+const hits = new Map();
+function limited(sender) {
+  const { window, maxRequests } = config.rateLimit;
+  const now = Date.now();
+  const arr = (hits.get(sender) || []).filter((t) => now - t < window);
+  arr.push(now);
+  hits.set(sender, arr);
+  return arr.length > maxRequests;
+}
+
+// Drop rate-limit history older than the window, so memory does not grow forever
+setInterval(() => {
+  const now = Date.now();
+  const window = config.rateLimit?.window || 60000;
+  for (const [sender, times] of hits) {
+    const recent = times.filter((t) => now - t < window);
+    if (recent.length) hits.set(sender, recent);
+    else hits.delete(sender);
+  }
+}, 60000).unref();
+
+const metaCache = new Map();
+async function getMeta(s, jid) {
+  const hit = metaCache.get(jid);
+  if (hit && Date.now() - hit.t < GROUP_META_TTL) return hit.meta;
+  const meta = await s.groupMetadata(jid);
+  metaCache.set(jid, { meta, t: Date.now() });
+  return meta;
+}
+
+async function handle(sock, m) {
+  if (!m.message) return;
+  const jid = m.key.remoteJid;
+
+  // Auto-view status
+  if (jid === 'status@broadcast') {
+    if (config.autoStatusView) await sock.readMessages([m.key]).catch(() => {});
+    if (config.autoStatusReact?.enabled && !m.key.fromMe && m.key.participant) {
+      const delay = 2000 + Math.random() * 3000;
+      setTimeout(() => {
+        sock
+          .sendMessage(
+            'status@broadcast',
+            { react: { key: m.key, text: config.autoStatusReact.emoji } },
+            { statusJidList: [m.key.participant, jidNormalizedUser(sock.user.id)] }
+          )
+          .catch(() => {});
+      }, delay);
+    }
+    return;
+  }
+
+  // Anti-delete
+  const proto = m.message.protocolMessage;
+  if (proto && proto.type === 0) {
+    const orig = cache.get(proto.key?.id);
+    // Skip when no owner is configured, so we never send to an invalid JID
+    if (config.antiDelete && config.owner && orig && !orig.key.fromMe) {
+      const ownerJid = config.owner + '@s.whatsapp.net';
+      const who = orig.key.participant || orig.key.remoteJid;
+      await sock.sendMessage(ownerJid, {
+        text: `🚨 *Anti-Delete*\n👤 @${num(who)}\n💬 ${jid}`,
+        mentions: [who],
+      }).catch((e) => console.error('anti-delete alert failed:', e.message));
+      await sock.sendMessage(ownerJid, { forward: orig }).catch(() => {});
+    }
+    return;
+  }
+
+  cache.set(m.key.id, m);
+  if (cache.size > MAX_CACHE) cache.delete(cache.keys().next().value);
+
+  const msg = unwrap(m.message);
+  const body =
+    msg.conversation ||
+    msg.extendedTextMessage?.text ||
+    msg.imageMessage?.caption ||
+    msg.videoMessage?.caption ||
+    '';
+
+  const prefix = config.prefix.find((p) => body.startsWith(p));
+  const [cmdName, ...args] = prefix ? body.slice(prefix.length).trim().split(/\s+/) : [];
+
+  const isGroup = jid.endsWith('@g.us');
+  const sender = isGroup ? m.key.participant : jid;
+  const isOwner = m.key.fromMe || num(sender) === config.owner;
+  const ci = msg.extendedTextMessage?.contextInfo;
+
+  const ctx = {
+    sock, m, jid, sender, isGroup, isOwner, args, body, db,
+    text: args.join(' '),
+    prefix, list, config, num,
+    mentioned: ci?.mentionedJid || [],
+    quotedSender: ci?.participant,
+    quotedMsg: ci?.quotedMessage,
+    reply: (text, opts = {}) => sock.sendMessage(jid, { text, ...opts }, { quoted: brandQuote(sock, m) }),
+    group: {
+      kick: (u) => sock.groupParticipantsUpdate(jid, [u], 'remove'),
+      promote: (u) => sock.groupParticipantsUpdate(jid, [u], 'promote'),
+      demote: (u) => sock.groupParticipantsUpdate(jid, [u], 'demote'),
+      members: async () => (await getMeta(sock, jid)).participants.map((p) => p.id),
+    },
+  };
+
+  if (isGroup) {
+    try {
+      ctx.meta = await getMeta(sock, jid);
+      const admins = ctx.meta.participants.filter((p) => p.admin).map((p) => jidNormalizedUser(p.id));
+      ctx.isAdmin = admins.includes(jidNormalizedUser(sender)) || isOwner;
+      ctx.botIsAdmin = admins.includes(jidNormalizedUser(sock.user.id));
+    } catch (e) {
+      ctx.isAdmin = isOwner;
+      ctx.botIsAdmin = false;
+    }
+  }
+
+  // Access gate: in private mode, strangers get nothing (no plugins, no commands)
+  if (!config.publicMode && !isOwner) return;
+
+  // ── Plugin hooks (run for allowed users, except the bot's own messages) ──
+  if (!m.key.fromMe) {
+    for (const p of plugins) {
+      if (p.events?.message) await p.events.message(ctx, { db }).catch((e) => console.error(`[${p.name}]`, e.message));
+    }
+  }
+
+  // ── Commands ──
+  const cmd = commands.get((cmdName || '').toLowerCase());
+  if (!cmd) return;
+
+  if (!isOwner && config.rateLimit?.enabled && limited(sender)) return;
+  if (cmd.ownerOnly && !isOwner) return;
+  if (cmd.groupOnly && !isGroup) return ctx.reply('Group only command.');
+  if (cmd.adminOnly && !ctx.isAdmin) return ctx.reply('Admins only.');
+  if (cmd.adminOnly && !ctx.botIsAdmin) return ctx.reply('Make me admin first.');
+
+  if (config.autoRead) sock.readMessages([m.key]).catch(() => {});
+  if (config.autoTyping) sock.sendPresenceUpdate('composing', jid).catch(() => {});
+
+  await cmd.run(ctx);
+  if (config.autoTyping) sock.sendPresenceUpdate('paused', jid).catch(() => {});
+}
+
+// ── Shutdown ──
+// One shutdown path: stop the socket, save pending data, release the lock, then exit.
+// Heroku and Render allow about 30 seconds, so a hard exit timer is set as a backstop.
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log('Shutting down...');
+  setTimeout(() => process.exit(0), 10000).unref();
+  clearInterval(lockTimer);
+  endSocket();
+  await db.flush().catch(() => {});
+  if (lockClient) {
+    try { await lockClient.query('SELECT pg_advisory_unlock($1)', [LOCK_ID]); } catch {}
+    try { lockClient.release(true); } catch {}
+  }
+  process.exit(0);
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
+// Unexpected errors leave the process in an unknown state. Log the stack and exit,
+// so the platform restarts the worker. The advisory lock keeps that restart safe.
+process.on('uncaughtException', (e) => {
+  console.error('uncaught:', e?.stack || e);
+  process.exit(1);
+});
+
+// Baileys sends internal retry requests on sockets that may already be closed. Those
+// rejections ("Connection Closed") are harmless, so they are logged once and not as errors.
+let closedNoticeShown = false;
+process.on('unhandledRejection', (e) => {
+  const message = e?.message || String(e);
+  if (message === 'Connection Closed') {
+    if (!closedNoticeShown) {
+      closedNoticeShown = true;
+      console.log('Ignored a retry on a closed WhatsApp connection (harmless).');
+    }
+    return;
+  }
+  console.error('unhandled:', e?.stack || message);
+});
+
+start();
