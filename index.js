@@ -29,55 +29,25 @@ const { Boom } = require('@hapi/boom');
 const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
-const http = require('http');
 const config = require('./config');
 const db = require('./db');
+const { handle, throttleSend, sentCache, cache, metaCache, GROUP_META_TTL } = require('./lib/handler');
+const { startKeepAlive } = require('./lib/keepalive');
+const { num, mask, buildStartupAlert } = require('./lib/startup');
 const { pool, init } = require('./pg');
 const { usePgAuthState } = require('./auth-pg');
 // SESSION_ID must start with ADEZ-XMD~ (validated in session-import.js)
 const { importSession, markSessionRejected, STORE_KEY } = require('./session-import');
 const { applyRuntimeSettings } = require('./lib/runtime');
-const { brandQuote } = require('./lib/brand');
 
 const GROUP_LINK = 'https://chat.whatsapp.com/CvpcZcqPckCCIFT1QpQsqs';
 const CHANNEL_LINK = 'https://whatsapp.com/channel/0029Vb8N0xYLikgHxdGh790m';
 
-const GROUP_META_TTL = 60000;        // group metadata is refreshed after 60 seconds
 const MAX_BAD_SESSION_RETRIES = 3;   // code-500 retries before reconnects stop
 const STARTUP_STEP_MS = 30000;       // a startup step that takes longer than this fails and retries
 const CONNECT_TIMEOUT_MS = 20000;    // a database connection that takes longer than this fails
 const LOCK_PING_MS = 30000;          // how often the lock connection is checked
 
-// ── Load commands (each file exports an array) ──
-const commands = new Map();
-const list = [];
-for (const f of fs.readdirSync(path.join(__dirname, 'commands')).filter((f) => f.endsWith('.js'))) {
-  for (const c of require('./commands/' + f)) {
-    commands.set(c.name, c);
-    (c.alias || []).forEach((a) => commands.set(a, c));
-    list.push(c);
-  }
-}
-
-// ── Load plugins (plugins/*.js with events: { message }) ──
-const plugins = [];
-const pdir = path.join(__dirname, 'plugins');
-if (fs.existsSync(pdir)) {
-  for (const f of fs.readdirSync(pdir).filter((f) => f.endsWith('.js'))) plugins.push(require('./plugins/' + f));
-}
-
-const cache = new Map(); // message id -> message (for anti-delete)
-const MAX_CACHE = 500;
-const num = (jid = '') => jid.split('@')[0].split(':')[0];
-// Masked version for logs, so phone numbers don't sit in log history
-const mask = (jid = '') => {
-  const n = num(jid);
-  return n.length > 4 ? `${n.slice(0, 4)}****` : '****';
-};
-
-// Messages we sent, kept so WhatsApp retry requests can be answered ("Waiting for this message" fix)
-const sentCache = new Map();
-const MAX_SENT = 1000;
 
 // Small in-memory store for Baileys' retry counters
 class MapCache {
@@ -89,93 +59,10 @@ class MapCache {
 }
 const retryCache = new MapCache();
 
-function detectHost() {
-  const e = process.env;
-  if (e.RENDER) return 'Render';
-  if (e.DYNO) return 'Heroku';
-  if (e.RAILWAY_ENVIRONMENT || e.RAILWAY_PROJECT_ID) return 'Railway';
-  if (e.KOYEB_APP_NAME) return 'Koyeb';
-  if (e.FLY_APP_NAME) return 'Fly.io';
-  if (e.REPL_ID || e.REPL_SLUG) return 'Replit';
-  if (e.VERCEL) return 'Vercel';
-  if (e.CODESPACES) return 'GitHub Codespaces';
-  if (e.PROJECT_DOMAIN) return 'Glitch';
-  if (e.P_SERVER_UUID) return 'Pterodactyl panel';
-  if (process.platform === 'win32') return 'Windows PC';
-  return process.platform === 'linux' ? 'VPS / Linux' : 'Local';
-}
-
-// Startup message text sent to the bot's own chat when it connects
-function buildStartupAlert(s) {
-  const tz = config.startupAlert?.timezone || 'UTC';
-  const time = new Date().toLocaleString('en-GB', {
-    timeZone: tz,
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  });
-  const { version } = require('./package.json');
-  const prefix = (config.prefix || ['.'])[0];
-  const mode = config.publicMode ? 'Public' : 'Private';
-
-  return [
-    `┏━━━━━━━━━━━━━━━━━━━━┓`,
-    `┃   ⚡ ${config.botName} ⚡`,
-    `┃   𝗖𝗼𝗻𝗻𝗲𝗰𝘁𝗲𝗱 𝘀𝘂𝗰𝗰𝗲𝘀𝘀𝗳𝘂𝗹𝗹𝘆`,
-    `┗━━━━━━━━━━━━━━━━━━━━┛`,
-    '',
-    `◈ Status   ➜ Online 🟢`,
-    `◈ Number   ➜ ${num(s.user.id)}`,
-    `◈ Time     ➜ ${time}`,
-    `◈ Host     ➜ ${detectHost()}`,
-    `◈ Mode     ➜ ${mode}`,
-    `◈ Prefix   ➜ ${prefix}`,
-    `◈ Version  ➜ v${version}`,
-    '',
-    `▸ Type ${prefix}menu to begin`,
-    `▸ Fast • Secure • Always On`,
-    '',
-    `━━━━━━━━━━━━━━━━━━━━`,
-    `POWERED BY ADEZ TECH`,
-  ].join('\n');
-}
 
 let announced = false; // so reconnects don't re-send the alert
 
-// ── HTTP server and keep-alive ──
-// Render's free web services sleep after 15 minutes without inbound traffic.
-// This server answers requests, and the bot pings its own public URL so Render sees traffic.
-const KEEP_ALIVE_MS = 10 * 60 * 1000;
-const PUBLIC_URL = (process.env.KEEP_ALIVE_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
-let keepAliveFailures = 0;
-
-if (process.env.PORT) {
-  http
-    .createServer((req, res) => {
-      res.writeHead(200, { 'Content-Type': 'text/plain' });
-      res.end(`${config.botName} is running. Connected: ${sock ? 'yes' : 'no'}`);
-    })
-    .listen(process.env.PORT, () => console.log(`HTTP server on port ${process.env.PORT}`));
-
-  if (PUBLIC_URL) {
-    console.log(`Keep-alive: pinging ${PUBLIC_URL} every ${KEEP_ALIVE_MS / 60000} minutes`);
-    setInterval(async () => {
-      try {
-        const res = await fetch(`${PUBLIC_URL}/health`, { signal: AbortSignal.timeout(20000) });
-        if (res.ok) {
-          keepAliveFailures = 0;
-        } else {
-          keepAliveFailures += 1;
-          console.warn(`Keep-alive: HTTP ${res.status} (${keepAliveFailures} in a row)`);
-        }
-      } catch (e) {
-        keepAliveFailures += 1;
-        console.warn(`Keep-alive failed (${keepAliveFailures} in a row): ${e.message}`);
-      }
-    }, KEEP_ALIVE_MS).unref();
-  } else {
-    console.warn('Keep-alive is off. Set KEEP_ALIVE_URL to your service URL, or the free web service will sleep.');
-  }
-}
+startKeepAlive(() => !!sock);
 
 // ── State shared across restarts of the socket ──
 let sock = null;          // the ONE active socket
@@ -495,143 +382,48 @@ async function start() {
   }
 }
 
-function unwrap(msg = {}) {
-  return msg.ephemeralMessage?.message || msg.viewOnceMessage?.message || msg.viewOnceMessageV2?.message || msg.documentWithCaptionMessage?.message || msg;
-}
-
-// Human-like pacing: every outgoing message waits a random delay, one at a time
-function throttleSend(s) {
-  const orig = s.sendMessage.bind(s);
-  const [min, max] = config.sendDelay || [0, 0];
-  let chain = Promise.resolve();
-  s.sendMessage = (...a) => {
-    const p = chain
-      .then(() => (max > 0 ? new Promise((r) => setTimeout(r, min + Math.random() * (max - min))) : null))
-      .then(async () => {
-        const res = await orig(...a);
-        if (res?.key?.id && res.message) {
-          sentCache.set(res.key.id, res.message);
-          if (sentCache.size > MAX_SENT) sentCache.delete(sentCache.keys().next().value);
-        }
-        return res;
-      });
-    chain = p.catch(() => {});
-    return p;
-  };
-}
-
-const hits = new Map();
-function limited(sender) {
-  const { window, maxRequests } = config.rateLimit;
-  const now = Date.now();
-  const arr = (hits.get(sender) || []).filter((t) => now - t < window);
-  arr.push(now);
-  hits.set(sender, arr);
-  return arr.length > maxRequests;
-}
-
-// Drop rate-limit history older than the window, so memory does not grow forever
-setInterval(() => {
-  const now = Date.now();
-  const window = config.rateLimit?.window || 60000;
-  for (const [sender, times] of hits) {
-    const recent = times.filter((t) => now - t < window);
-    if (recent.length) hits.set(sender, recent);
-    else hits.delete(sender);
+// ── Shutdown ──
+// One shutdown path: stop the socket, save pending data, release the lock, then exit.
+// Heroku and Render allow about 30 seconds, so a hard exit timer is set as a backstop.
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log('Shutting down...');
+  setTimeout(() => process.exit(0), 10000).unref();
+  clearInterval(lockTimer);
+  endSocket();
+  await db.flush().catch(() => {});
+  if (lockClient) {
+    try { await lockClient.query('SELECT pg_advisory_unlock($1)', [LOCK_ID]); } catch {}
+    try { lockClient.release(true); } catch {}
   }
-}, 60000).unref();
-
-const metaCache = new Map();
-async function getMeta(s, jid) {
-  const hit = metaCache.get(jid);
-  if (hit && Date.now() - hit.t < GROUP_META_TTL) return hit.meta;
-  const meta = await s.groupMetadata(jid);
-  metaCache.set(jid, { meta, t: Date.now() });
-  return meta;
+  process.exit(0);
 }
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
 
-async function handle(sock, m) {
-  if (!m.message) return;
-  const jid = m.key.remoteJid;
+// Unexpected errors leave the process in an unknown state. Log the stack and exit,
+// so the platform restarts the worker. The advisory lock keeps that restart safe.
+process.on('uncaughtException', (e) => {
+  console.error('uncaught:', e?.stack || e);
+  process.exit(1);
+});
 
-  // Auto-view status
-  if (jid === 'status@broadcast') {
-    if (config.autoStatusView) await sock.readMessages([m.key]).catch(() => {});
-    if (config.autoStatusReact?.enabled && !m.key.fromMe && m.key.participant) {
-      const delay = 2000 + Math.random() * 3000;
-      setTimeout(() => {
-        sock
-          .sendMessage(
-            'status@broadcast',
-            { react: { key: m.key, text: config.autoStatusReact.emoji } },
-            { statusJidList: [m.key.participant, jidNormalizedUser(sock.user.id)] }
-          )
-          .catch(() => {});
-      }, delay);
+// Baileys sends internal retry requests on sockets that may already be closed. Those
+// rejections ("Connection Closed") are harmless, so they are logged once and not as errors.
+let closedNoticeShown = false;
+process.on('unhandledRejection', (e) => {
+  const message = e?.message || String(e);
+  if (message === 'Connection Closed') {
+    if (!closedNoticeShown) {
+      closedNoticeShown = true;
+      console.log('Ignored a retry on a closed WhatsApp connection (harmless).');
     }
     return;
   }
+  console.error('unhandled:', e?.stack || message);
+});
 
-  // Anti-delete
-  const proto = m.message.protocolMessage;
-  if (proto && proto.type === 0) {
-    const orig = cache.get(proto.key?.id);
-    // Skip when no owner is configured, so we never send to an invalid JID
-    if (config.antiDelete && config.owner && orig && !orig.key.fromMe) {
-      const ownerJid = config.owner + '@s.whatsapp.net';
-      const who = orig.key.participant || orig.key.remoteJid;
-      await sock.sendMessage(ownerJid, {
-        text: `🚨 *Anti-Delete*\n👤 @${num(who)}\n💬 ${jid}`,
-        mentions: [who],
-      }).catch((e) => console.error('anti-delete alert failed:', e.message));
-      await sock.sendMessage(ownerJid, { forward: orig }).catch(() => {});
-    }
-    return;
-  }
+start();
 
-  cache.set(m.key.id, m);
-  if (cache.size > MAX_CACHE) cache.delete(cache.keys().next().value);
-
-  const msg = unwrap(m.message);
-  const body =
-    msg.conversation ||
-    msg.extendedTextMessage?.text ||
-    msg.imageMessage?.caption ||
-    msg.videoMessage?.caption ||
-    '';
-
-  const prefix = config.prefix.find((p) => body.startsWith(p));
-  const [cmdName, ...args] = prefix ? body.slice(prefix.length).trim().split(/\s+/) : [];
-
-  const isGroup = jid.endsWith('@g.us');
-  const sender = isGroup ? m.key.participant : jid;
-  const isOwner = m.key.fromMe || num(sender) === config.owner;
-  const ci = msg.extendedTextMessage?.contextInfo;
-
-  const ctx = {
-    sock, m, jid, sender, isGroup, isOwner, args, body, db,
-    text: args.join(' '),
-    prefix, list, config, num,
-    mentioned: ci?.mentionedJid || [],
-    quotedSender: ci?.participant,
-    quotedMsg: ci?.quotedMessage,
-    reply: (text, opts = {}) => sock.sendMessage(jid, { text, ...opts }, { quoted: brandQuote(sock, m) }),
-    group: {
-      kick: (u) => sock.groupParticipantsUpdate(jid, [u], 'remove'),
-      promote: (u) => sock.groupParticipantsUpdate(jid, [u], 'promote'),
-      demote: (u) => sock.groupParticipantsUpdate(jid, [u], 'demote'),
-      members: async () => (await getMeta(sock, jid)).participants.map((p) => p.id),
-    },
-  };
-
-  if (isGroup) {
-    try {
-      ctx.meta = await getMeta(sock, jid);
-      const admins = ctx.meta.participants.filter((p) => p.admin).map((p) => jidNormalizedUser(p.id));
-      ctx.isAdmin = admins.includes(jidNormalizedUser(sender)) || isOwner;
-      ctx.botIsAdmin = admins.includes(jidNormalizedUser(sock.user.id));
-    } catch (e) {
-      ctx.isAdmin = isOwner;
-      ctx.botIsAdmin = false;
-    }
-    }
+          
