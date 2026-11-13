@@ -263,27 +263,22 @@ async function start() {
           const jid = jidNormalizedUser(s.user.id);
           const text = buildStartupAlert(s);
           try {
+            const { cardImage, linkOf } = require('./lib/menu');
+            const host = linkOf(config);
             await s.sendMessage(jid, {
               text,
-              footer: `${config.botName} • ADEZ TECH`,
+              footer: '',
               interactiveButtons: [
-                {
-                  name: 'cta_url',
-                  buttonParamsJson: JSON.stringify({
-                    display_text: '📢 Follow Channel',
-                    url: CHANNEL_LINK,
-                    merchant_url: CHANNEL_LINK,
-                  }),
-                },
-                {
-                  name: 'cta_url',
-                  buttonParamsJson: JSON.stringify({
-                    display_text: '👥 Join Group',
-                    url: GROUP_LINK,
-                    merchant_url: GROUP_LINK,
-                  }),
-                },
+                { name: 'cta_url', buttonParamsJson: JSON.stringify({ display_text: 'Hosting Site', url: host, merchant_url: host }) },
+                { name: 'cta_url', buttonParamsJson: JSON.stringify({ display_text: '📢 Follow Channel', url: CHANNEL_LINK, merchant_url: CHANNEL_LINK }) },
+                { name: 'cta_url', buttonParamsJson: JSON.stringify({ display_text: '👥 Join Group', url: GROUP_LINK, merchant_url: GROUP_LINK }) },
               ],
+              contextInfo: {
+                externalAdReply: {
+                  title: config.botName, body: 'Click to open hosting site', thumbnailUrl: await cardImage(config),
+                  sourceUrl: host, mediaType: 1, renderLargerThumbnail: true,
+                },
+              },
             });
           } catch (e) {
             console.error('startup alert buttons failed:', e.message);
@@ -425,4 +420,5 @@ process.on('unhandledRejection', (e) => {
 
 start();
 
-                                
+
+                              
