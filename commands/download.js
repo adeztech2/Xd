@@ -159,7 +159,7 @@ async function getMp3Link(id) {
 
 const playCommand = {
   name: 'play',
-  alias: ['song'],
+  alias: ['song', 'ytmp3', 'yta'],
   desc: 'Send a song from YouTube (name or link)',
   run: async (ctx) => {
     const query = (ctx.text || '').trim();
@@ -284,10 +284,158 @@ async function fbInfo(link) {
   return null;
 }
 
+
+// ---------- YouTube video (.video) ----------
+
+async function getMp4Link(id) {
+  const cdnRes = await fetch(`${ST_BASE}/random-cdn`, { headers: ST_HEADERS });
+  if (!cdnRes.ok) throw new Error('HTTP ' + cdnRes.status);
+  const cdn = (await cdnRes.json()).cdn;
+  const info = await stPost(`https://${cdn}/v2/info`, { url: `https://www.youtube.com/watch?v=${id}` });
+  const dec = stDecrypt(info.data);
+  for (const quality of ['360', '480', '720', '240']) {
+    try {
+      const dl = await stPost(`https://${cdn}/download`, { id, downloadType: 'video', quality, key: dec.key });
+      if (dl && dl.data && dl.data.downloadUrl) return { title: dec.title || 'Video', link: dl.data.downloadUrl, quality };
+    } catch (e) {
+      console.error(`video quality ${quality} failed:`, e && e.message);
+    }
+  }
+  throw new Error('no video link');
+}
+
+// Sends a remote file as video/image/audio/document; if it is over the limit, sends the link instead
+async function sendRemote(ctx, url, kind, { caption = '', fileName, maxMb = MAX_VIDEO_MB } = {}) {
+  await assertPublic(url);
+  const f = await fetchFile(url, maxMb);
+  if (f.tooBig) {
+    await ctx.reply(card('', [`That file is bigger than ${maxMb} MB`, `Download : ${url}`]));
+    return false;
+  }
+  const size = (f.buf.length / (1024 * 1024)).toFixed(1);
+  const cap = [caption, `Size : ${size} MB`].filter(Boolean).join('\n');
+  if (kind === 'video') await ctx.sock.sendMessage(ctx.jid, { video: f.buf, mimetype: 'video/mp4', caption: cap });
+  else if (kind === 'image') await ctx.sock.sendMessage(ctx.jid, { image: f.buf, caption: cap });
+  else if (kind === 'audio') await ctx.sock.sendMessage(ctx.jid, { audio: f.buf, mimetype: 'audio/mpeg', fileName });
+  else await ctx.sock.sendMessage(ctx.jid, { document: f.buf, mimetype: f.type, fileName: fileName || 'file', caption: cap });
+  return true;
+}
+
+// Wraps a downloader: reaction states and a friendly error
+const downloader = (name, fn) => async (ctx) => {
+  try {
+    await react(ctx, '⏳');
+    const ok = await fn(ctx);
+    await react(ctx, ok === false ? '❌' : '✅');
+  } catch (e) {
+    console.error(`${name} error:`, e && e.message);
+    await react(ctx, '❌');
+    await ctx.reply(fail(e && e.blocked ? 'That link is not allowed.' : `Could not download that ${name} right now. Try again later.`));
+  }
+};
+
+const mediaUrl = (u, base) => (u && u.startsWith('/') ? base + u : u);
+
 // ---------- commands ----------
 
 module.exports = [
   playCommand,
+  {
+    name: 'video',
+    alias: ['ytmp4', 'ytv', 'ytvideo'],
+    desc: 'Send a YouTube video (name or link)',
+    run: downloader('video', async (ctx) => {
+      const query = (ctx.text || '').trim();
+      if (!query) { await ctx.reply(fail('Example: .video Faded Alan Walker')); return false; }
+      let id = youtubeId(query);
+      let title = '';
+      if (!id) {
+        const res = await yts(query);
+        const v = res.videos && res.videos[0];
+        if (!v) { await ctx.reply(fail('No video found. Try other words.')); return false; }
+        id = v.videoId;
+        title = v.title;
+      }
+      const vid = await getMp4Link(id);
+      return sendRemote(ctx, vid.link, 'video', { caption: `Title : ${(title || vid.title).slice(0, 80)}\nQuality : ${vid.quality}p` });
+    }),
+  },
+  {
+    name: 'tiktok',
+    alias: ['tt', 'ttdl', 'tiktokdl'],
+    desc: 'Download a TikTok video (no watermark)',
+    run: downloader('TikTok', async (ctx) => {
+      const link = (ctx.text || '').trim().split(/\s+/)[0];
+      if (!/tiktok\.com\//i.test(link || '')) { await ctx.reply(fail('Example: .tiktok https://vm.tiktok.com/xxxx')); return false; }
+      const d = await getJsonSafe(`https://www.tikwm.com/api/?url=${encodeURIComponent(link)}&hd=1`);
+      const x = d && d.code === 0 && d.data;
+      if (!x) { await ctx.reply(fail('Could not get that TikTok. Make sure it is public.')); return false; }
+      const caption = `Title : ${String(x.title || 'TikTok').slice(0, 80)}${x.author ? `\nBy : @${x.author.unique_id}` : ''}`;
+      if (Array.isArray(x.images) && x.images.length) {
+        for (const img of x.images.slice(0, 5)) await sendRemote(ctx, mediaUrl(img, 'https://www.tikwm.com'), 'image', { caption });
+        return true;
+      }
+      const url = mediaUrl(x.hdplay || x.play, 'https://www.tikwm.com');
+      if (!url) { await ctx.reply(fail('No video found in that link.')); return false; }
+      return sendRemote(ctx, url, 'video', { caption });
+    }),
+  },
+  {
+    name: 'ttaudio',
+    alias: ['tta', 'tiktokmp3', 'tiktokaudio'],
+    desc: 'Get the sound of a TikTok as audio',
+    run: downloader('TikTok sound', async (ctx) => {
+      const link = (ctx.text || '').trim().split(/\s+/)[0];
+      if (!/tiktok\.com\//i.test(link || '')) { await ctx.reply(fail('Example: .ttaudio https://vm.tiktok.com/xxxx')); return false; }
+      const d = await getJsonSafe(`https://www.tikwm.com/api/?url=${encodeURIComponent(link)}`);
+      const x = d && d.code === 0 && d.data;
+      const url = x && mediaUrl(x.music, 'https://www.tikwm.com');
+      if (!url) { await ctx.reply(fail('Could not get the sound of that TikTok.')); return false; }
+      return sendRemote(ctx, url, 'audio', { fileName: `${String((x.music_info && x.music_info.title) || 'tiktok').replace(/[^\w\s.-]/g, '').slice(0, 50) || 'tiktok'}.mp3`, maxMb: MAX_SONG_MB });
+    }),
+  },
+  {
+    name: 'twitter',
+    alias: ['x', 'xdl', 'twdl'],
+    desc: 'Download a video or photo from a Twitter / X post',
+    run: downloader('post', async (ctx) => {
+      const [link, pick] = (ctx.text || '').trim().split(/\s+/);
+      const m = (link || '').match(/(?:twitter|x)\.com\/([^/?#]+)\/status\/(\d+)/i);
+      if (!m) { await ctx.reply(fail('Example: .twitter https://x.com/user/status/123456')); return false; }
+      const d = await getJsonSafe(`https://api.vxtwitter.com/${m[1]}/status/${m[2]}`);
+      const media = (d && Array.isArray(d.media_extended) ? d.media_extended : []).filter((i) => i && i.url);
+      if (!media.length) { await ctx.reply(fail('No media found in that post.')); return false; }
+      const n = Math.min(Math.max(parseInt(pick, 10) || 1, 1), media.length);
+      const item = media[n - 1];
+      const caption = [`Post by : ${d.user_screen_name || m[1]}`, media.length > 1 ? `Item : ${n} of ${media.length} (add a number after the link for others)` : ''].filter(Boolean).join('\n');
+      return sendRemote(ctx, item.url, item.type === 'image' ? 'image' : 'video', { caption });
+    }),
+  },
+  {
+    name: 'mediafire',
+    alias: ['mf', 'mfdl'],
+    desc: 'Download a file from a MediaFire link',
+    run: downloader('file', async (ctx) => {
+      const link = (ctx.text || '').trim().split(/\s+/)[0];
+      if (!/^https?:\/\/(www\.)?mediafire\.com\//i.test(link || '')) { await ctx.reply(fail('Example: .mediafire https://www.mediafire.com/file/xxxx/name.zip')); return false; }
+      const page = await fetch(link, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(30000) });
+      if (!page.ok) throw new Error('HTTP ' + page.status);
+      const html = await page.text();
+      let url = null;
+      const scrambled = html.match(/data-scrambled-url="([^"]+)"/i);
+      if (scrambled) {
+        try { url = Buffer.from(scrambled[1], 'base64').toString('utf8'); } catch (e) { /* try the next pattern */ }
+      }
+      if (!url) {
+        const direct = html.match(/href="(https?:\/\/download[^"]*mediafire\.com[^"]+)"/i);
+        url = direct && direct[1];
+      }
+      if (!url || !/^https?:\/\//i.test(url)) { await ctx.reply(fail('Could not find the download link. The file may be private or removed.')); return false; }
+      let fileName = 'file';
+      try { fileName = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') || 'file'; } catch (e) { /* keep default */ }
+      return sendRemote(ctx, url, 'document', { fileName, caption: `Name : ${fileName}`, maxMb: MAX_APK_MB });
+    }),
+  },
   {
     name: 'dl',
     desc: 'Download a file from a direct link',
@@ -579,3 +727,4 @@ module.exports = [
     }),
   },
 ];
+                    
