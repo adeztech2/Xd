@@ -336,6 +336,90 @@ const downloader = (name, fn) => async (ctx) => {
 
 const mediaUrl = (u, base) => (u && u.startsWith('/') ? base + u : u);
 
+// ---------- TikTok helpers ----------
+
+function formatNumber(num) {
+  if (!num) return '0';
+  if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+  if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+  return String(num);
+}
+
+const UA_BROWSER = { 'User-Agent': 'Mozilla/5.0' };
+
+// Each entry returns { videoUrl, title, stats } or null. Errors are caught by the caller.
+const TIKTOK_APIS = [
+  {
+    name: 'TikWM',
+    run: async (link) => {
+      const d = await getJsonSafe(`https://www.tikwm.com/api/?url=${encodeURIComponent(link)}&hd=1`);
+      const x = d && d.code === 0 && d.data;
+      if (!x) return null;
+      const videoUrl = mediaUrl(x.hdplay || x.play, 'https://www.tikwm.com');
+      if (!videoUrl) return null;
+      return {
+        videoUrl,
+        title: x.title,
+        stats: `👁️ ${formatNumber(x.play_count)} | ❤️ ${formatNumber(x.digg_count)}`,
+      };
+    },
+  },
+  {
+    name: 'SSSTikTok',
+    run: async (link) => {
+      const r = await fetch('https://ssstik.io/api/action', {
+        method: 'POST',
+        headers: { ...UA_BROWSER, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ url: link }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!r.ok) return null;
+      const d = await r.json();
+      return d && d.video ? { videoUrl: d.video, title: d.title } : null;
+    },
+  },
+  {
+    name: 'Ddownr',
+    run: async (link) => {
+      const d = await fetch(`https://api.ddownr.com/api/v1/tiktok?url=${encodeURIComponent(link)}`, {
+        headers: UA_BROWSER,
+        signal: AbortSignal.timeout(15000),
+      }).then((r) => (r.ok ? r.json() : null));
+      return d && d.data && d.data.video ? { videoUrl: d.data.video, title: d.data.title } : null;
+    },
+  },
+  {
+    name: 'Tiktokio',
+    run: async (link) => {
+      const d = await fetch(`https://tiktokio.com/api/v1/tiktok?url=${encodeURIComponent(link)}`, {
+        headers: UA_BROWSER,
+        signal: AbortSignal.timeout(15000),
+      }).then((r) => (r.ok ? r.json() : null));
+      return d && d.data && d.data.video_url ? { videoUrl: d.data.video_url, title: d.data.title } : null;
+    },
+  },
+  {
+    name: 'SnapTik',
+    run: async (link) => {
+      const d = await fetch(`https://snaptik.app/api/action?url=${encodeURIComponent(link)}`, {
+        headers: UA_BROWSER,
+        signal: AbortSignal.timeout(15000),
+      }).then((r) => (r.ok ? r.json() : null));
+      return d && d.video ? { videoUrl: d.video, title: d.title } : null;
+    },
+  },
+  {
+    name: 'MusicallyDown',
+    run: async (link) => {
+      const d = await fetch(`https://musicallydown.com/api/download?url=${encodeURIComponent(link)}`, {
+        headers: UA_BROWSER,
+        signal: AbortSignal.timeout(15000),
+      }).then((r) => (r.ok ? r.json() : null));
+      return d && d.video ? { videoUrl: d.video, title: d.title } : null;
+    },
+  },
+];
+
 // ---------- commands ----------
 
 module.exports = [
@@ -366,18 +450,49 @@ module.exports = [
     desc: 'Download a TikTok video (no watermark)',
     run: downloader('TikTok', async (ctx) => {
       const link = (ctx.text || '').trim().split(/\s+/)[0];
-      if (!/tiktok\.com\//i.test(link || '')) { await ctx.reply(fail('Example: .tiktok https://vm.tiktok.com/xxxx')); return false; }
-      const d = await getJsonSafe(`https://www.tikwm.com/api/?url=${encodeURIComponent(link)}&hd=1`);
-      const x = d && d.code === 0 && d.data;
-      if (!x) { await ctx.reply(fail('Could not get that TikTok. Make sure it is public.')); return false; }
-      const caption = `Title : ${String(x.title || 'TikTok').slice(0, 80)}${x.author ? `\nBy : @${x.author.unique_id}` : ''}`;
-      if (Array.isArray(x.images) && x.images.length) {
-        for (const img of x.images.slice(0, 5)) await sendRemote(ctx, mediaUrl(img, 'https://www.tikwm.com'), 'image', { caption });
-        return true;
+      if (!/tiktok\.com\//i.test(link || '')) {
+        await ctx.reply(fail('Example: .tiktok https://vm.tiktok.com/xxxx'));
+        return false;
       }
-      const url = mediaUrl(x.hdplay || x.play, 'https://www.tikwm.com');
-      if (!url) { await ctx.reply(fail('No video found in that link.')); return false; }
-      return sendRemote(ctx, url, 'video', { caption });
+
+      let found = null;
+      let usedApi = '';
+      for (const api of TIKTOK_APIS) {
+        try {
+          console.log(`Trying TikTok API: ${api.name}`);
+          const r = await api.run(link);
+          if (r && r.videoUrl) {
+            found = r;
+            usedApi = api.name;
+            break;
+          }
+        } catch (e) {
+          console.log(`TikTok ${api.name} failed:`, e && e.message);
+        }
+      }
+
+      if (!found) {
+        await ctx.reply(fail('Could not download that TikTok. Make sure it is public, or try again later.'));
+        return false;
+      }
+
+      await assertPublic(found.videoUrl);
+      const f = await fetchFile(found.videoUrl, MAX_VIDEO_MB);
+      if (f.tooBig) {
+        await ctx.reply(card('', [`Video is bigger than ${MAX_VIDEO_MB} MB`, `Download : ${found.videoUrl}`]));
+        return false;
+      }
+
+      const size = (f.buf.length / (1024 * 1024)).toFixed(1);
+      const caption = card('', [
+        `Title : ${String(found.title || 'TikTok').slice(0, 80)}`,
+        found.stats ? `Stats : ${found.stats}` : '',
+        `Size : ${size} MB`,
+        `API : ${usedApi}`,
+      ].filter(Boolean));
+
+      await ctx.sock.sendMessage(ctx.jid, { video: f.buf, mimetype: 'video/mp4', caption });
+      return true;
     }),
   },
   {
@@ -727,4 +842,3 @@ module.exports = [
     }),
   },
 ];
-                    
