@@ -51,6 +51,6 @@ module.exports = {
     timezone: process.env.TIMEZONE || 'Africa/Nairobi',
   },
 
-  sendDelay: [800, 2500],
+  sendDelay: [0, 300], // short pause only; long delays slow replies down
   rateLimit: { enabled: true, window: 60000, maxRequests: 30 },
 };
