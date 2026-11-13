@@ -7,14 +7,14 @@ module.exports = [
       const vcard = [
         'BEGIN:VCARD',
         'VERSION:3.0',
-        'FN:Dev Arnold Adez',
+        'FN:Arnold Adez',
         'ORG:ADEZ TECH;',
         'TEL;type=CELL;waid=254111783552:+254111783552',
         'END:VCARD',
       ].join('\n');
       await sock.sendMessage(
         jid,
-        { contacts: { displayName: 'Dev Arnold Adez', contacts: [{ vcard }] } },
+        { contacts: { displayName: 'Arnold Adez', contacts: [{ vcard }] } },
         { quoted: m }
       );
     },
