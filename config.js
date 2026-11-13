@@ -4,16 +4,19 @@ const owner = (process.env.OWNER_NUMBER || '').replace(/\D/g, '');
 const prefixEnv = (process.env.PREFIX || '').trim();
 
 module.exports = {
-  botName: process.env.BOT_NAME || 'ADEZ MD',
+  botName: process.env.BOT_NAME || 'ADEZ XMD',
   prefix: prefixEnv ? [prefixEnv] : ['.', '!', '/'],
   owner,
   pairNumber: (process.env.PAIR_NUMBER || owner).replace(/\D/g, ''),
   publicMode: (process.env.MODE || 'private').toLowerCase() === 'public',
   sessionDir: './session',
+  botTagline: process.env.BOT_TAGLINE || 'The best bot in the universe',
+  botPic: process.env.BOT_PIC || 'https://u.pone.rs/tntebijt.jpeg',
+  botRepo: process.env.BOT_REPO || 'adeztech2/adez-md',
 
   // Brand styling for all bot replies. This mimics a WhatsApp business/status card look.
   replyStyle: {
-    enabled: true,
+    enabled: process.env.BRAND_QUOTE !== 'off', // set BRAND_QUOTE=off to send plain replies
     title: 'WhatsApp Business',
     subtitle: 'Status',
     contactLabel: 'Contact',
