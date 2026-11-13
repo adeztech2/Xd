@@ -65,6 +65,31 @@ module.exports = [
     desc: 'GitHub repo info, e.g. .repo owner/name',
     run: safe(async (ctx) => {
       const name = (ctx.text || '').trim();
+      if (!name) {
+        // Keith-style card for the bot's own repo
+        const repo = ctx.config.botRepo;
+        const r = await getJson(`https://api.github.com/repos/${repo}`);
+        const fmt = (d) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+        const text = [
+          `Hello @${ctx.m.pushName || 'Anonymous'}, 👋 This is *${ctx.config.botName}*`,
+          `${ctx.config.botTagline} developed by Arnold Adez. Fork and give a star 🌟 to my repo`,
+          '',
+          '┌──────────────',
+          `│✞ Stars: ${r.stargazers_count}`,
+          `│✞ Forks: ${r.forks_count}`,
+          `│✞ Release Date: ${fmt(r.created_at)}`,
+          `│✞ Last Update: ${fmt(r.pushed_at)}`,
+          '│✞ Owner: Arnold Adez',
+          '└──────────────',
+        ].join('\n');
+        return ctx.sock.sendMessage(ctx.jid, {
+          text,
+          contextInfo: { externalAdReply: {
+            title: ctx.config.botName, body: 'Click to visit repository', thumbnailUrl: ctx.config.botPic,
+            sourceUrl: r.html_url, mediaType: 1, renderLargerThumbnail: true,
+          } },
+        }, { quoted: ctx.m });
+      }
       if (!validRepo(name)) return ctx.reply(repoHelp);
       const r = await getJson(`https://api.github.com/repos/${name}`);
       const lines = [
