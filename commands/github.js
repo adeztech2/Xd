@@ -1,3 +1,4 @@
+const { cardImage, linkOf, sendNativeFlow } = require('../lib/menu');
 const fail = (msg) => msg;
 const MAX_MB = 40;
 
@@ -82,11 +83,24 @@ module.exports = [
           '│✞ Owner: Arnold Adez',
           '└──────────────',
         ].join('\n');
+        if (process.env.MENU_BUTTONS !== 'off') {
+          try {
+            const host = linkOf(ctx.config);
+            return await sendNativeFlow(ctx, {
+              text, mentions: [ctx.sender],
+              buttons: [
+                { name: 'cta_url', params: { display_text: 'Hosting Site', url: host, merchant_url: host } },
+                { name: 'cta_url', params: { display_text: 'GitHub Repo', url: r.html_url, merchant_url: r.html_url } },
+                { name: 'cta_copy', params: { display_text: 'Copy Repo Link', id: 'copy_repo', copy_code: r.html_url } },
+              ],
+            });
+          } catch (e) { console.error('repo buttons failed, sending plain card:', e && e.message); }
+        }
         return ctx.sock.sendMessage(ctx.jid, {
           text,
           contextInfo: { externalAdReply: {
-            title: ctx.config.botName, body: 'Click to visit repository', thumbnailUrl: ctx.config.botPic,
-            sourceUrl: r.html_url, mediaType: 1, renderLargerThumbnail: true,
+            title: ctx.config.botName, body: 'Click to open hosting site', thumbnailUrl: await cardImage(ctx.config),
+            sourceUrl: linkOf(ctx.config), mediaType: 1, renderLargerThumbnail: true,
           } },
         }, { quoted: ctx.m });
       }
@@ -167,3 +181,4 @@ module.exports = [
     }),
   },
 ];
+        
