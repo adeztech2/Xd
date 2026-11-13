@@ -3,7 +3,7 @@ const MENU_IMAGE_PAGE = 'https://wa.me/message/FGI2ULZTWGCVL1';
 const MAX_MENU_IMAGE_BYTES = 5 * 1024 * 1024;
 const CATEGORIES = [
   ['General', '🌐', ['menu', 'alive', 'ping', 'uptime', 'time', 'date', 'owner', 'adst', 'pair']],
-  ['Group', '👥', ['kick', 'add', 'promote', 'demote', 'tagall', 'hidetag', 'admins', 'groupinfo', 'link', 'revoke', 'closegroup', 'opengroup', 'setname', 'setdesc', 'events', 'del', 'leave', 'gpic']],
+  ['Group', '👥', ['kick', 'add', 'promote', 'demote', 'tagall', 'hidetag', 'admins', 'groupinfo', 'link', 'revoke', 'closegroup', 'opengroup', 'setname', 'setdesc', 'events', 'del', 'leave', 'gpic', 'anti', 'warn', 'warnings', 'resetwarn', 'addbad', 'delbad', 'badwords']],
   ['Tools', '🛠️', ['rank', 'settings', 'calc', 'reverse', 'say', 'weather', 'translate', 'define', 'wiki', 'qr', 'password', 'uuid', 'base64', 'hash', 'bmi', 'count']],
   ['AI', '🤖', ['ai', 'ask', 'chatgpt', 'adezai', 'gpt']],
   ['Download', '📥', ['play', 'yts', 'dl', 'dlimage', 'dlvideo', 'dlaudio', 'apk', 'facebook', 'instagram', 'tgsticker', 'gitzip', 'gitfile', 'npm']],
