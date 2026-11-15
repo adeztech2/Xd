@@ -39,11 +39,6 @@
       "description": "Timezone for time display, e.g. Africa/Nairobi",
       "value": "Africa/Nairobi",
       "required": false
-    },
-    "AUTO_REACT": {
-      "description": "React to incoming messages (true or false)",
-      "value": "true",
-      "required": false
     }
   }
 }
