@@ -11,6 +11,7 @@ module.exports = {
     message: async (ctx) => {
       const name = COMMANDS.get((ctx.body || '').trim().toLowerCase());
       if (!name) return;
+      if (ctx.rateLimited()) return;
       const command = ctx.list.find((entry) => entry.name === name);
       if (command) await command.run(ctx);
     },
