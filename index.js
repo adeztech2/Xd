@@ -30,7 +30,7 @@ const { num, mask, buildStartupAlert } = require('./lib/startup');
 const { pool, init } = require('./pg');
 const { usePgAuthState } = require('./auth-pg');
 // SESSION_ID must start with ADEZ-XMD~ (validated in session-import.js)
-const { importSession, markSessionRejected, STORE_KEY } = require('./session-import');
+const { importSession, markSessionRejected, STORE_KEY, LOCK_ID } = require('./session-import');
 const { applyRuntimeSettings } = require('./lib/runtime');
 
 const GROUP_LINK = 'https://chat.whatsapp.com/CvpcZcqPckCCIFT1QpQsqs';
@@ -66,7 +66,6 @@ let replaced = false;     // set when another device/instance took over this ses
 let halted = false;       // set when WhatsApp keeps rejecting the saved session (500)
 let badRetries = 0;       // code-500 retries since the last successful connection
 let shuttingDown = false;
-const LOCK_ID = 727272;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -419,6 +418,3 @@ process.on('unhandledRejection', (e) => {
 });
 
 start();
-
-
-                              
