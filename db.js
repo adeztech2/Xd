@@ -3,6 +3,8 @@
 const fs = require('fs');
 const path = require('path');
 const { pool } = require('./pg');
+const { STORE_KEY } = require('./session-import');
+const ns = (k) => `${STORE_KEY}:${k}`; // each bot keeps its own rows when databases are shared
 
 const file = path.join(__dirname, 'data', 'db.json');
 const store = new Map();
@@ -24,10 +26,10 @@ async function flush() {
         if (store.has(k)) {
           await pool.query(
             'INSERT INTO kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2',
-            [k, JSON.stringify(store.get(k))]
+            [ns(k), JSON.stringify(store.get(k))]
           );
         } else {
-          await pool.query('DELETE FROM kv WHERE key = $1', [k]);
+          await pool.query('DELETE FROM kv WHERE key = $1', [ns(k)]);
         }
       }
     } else {
@@ -46,7 +48,7 @@ module.exports = {
   get: async (k) => {
     if (store.has(k)) return store.get(k);
     if (pool) {
-      const r = await pool.query('SELECT value FROM kv WHERE key = $1', [k]);
+      const r = await pool.query('SELECT value FROM kv WHERE key = $1', [ns(k)]);
       if (r.rows[0]) {
         const v = JSON.parse(r.rows[0].value);
         store.set(k, v);
