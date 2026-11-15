@@ -7,8 +7,6 @@ const path = require('path');
 const config = require('./config');
 const { pool } = require('./pg');
 
-// Fixed database key. SESSION_ID is the credential itself, so it must not be used as a key.
-const STORE_KEY = 'main';
 const SESSION_PREFIX = 'ADEZ-XMD~';
 const IMPORT_MARKER_PREFIX = 'import-marker:';
 
@@ -34,6 +32,25 @@ function parseSessionId(raw) {
 function hashOf(raw) {
   return crypto.createHash('sha256').update(raw).digest('hex');
 }
+
+// Each linked WhatsApp number gets its own database key and its own lock, so many bots can share one
+// database without touching each other's session. The key is a hash of the number, never the SESSION_ID
+// itself (that is the credential). With no SESSION_ID the old fixed key is used.
+function deriveStore() {
+  const fallback = { key: 'main', lock: 727272 };
+  const raw = (process.env.SESSION_ID || '').trim();
+  if (!raw) return fallback;
+  try {
+    const creds = JSON.parse(parseSessionId(raw));
+    const num = String(creds?.me?.id || '').split(':')[0].split('@')[0];
+    if (!num) return fallback;
+    const h = crypto.createHash('sha256').update(num).digest();
+    return { key: 'bot-' + h.toString('hex').slice(0, 12), lock: (h.readUInt32BE(0) & 0x3fffffff) + 1000 };
+  } catch {
+    return fallback;
+  }
+}
+const { key: STORE_KEY, lock: LOCK_ID } = deriveStore();
 
 function getImportMarkerId() {
   return `${IMPORT_MARKER_PREFIX}${STORE_KEY}`;
@@ -121,6 +138,7 @@ module.exports = {
   markSessionRejected,
   clearImportMarker,
   STORE_KEY,
+  LOCK_ID,
   SESSION_PREFIX,
   getImportMarkerId,
   IMPORT_MARKER_PREFIX,
