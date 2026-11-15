@@ -21,7 +21,12 @@ function violation(ctx, s, msg) {
   const body = ctx.body || '';
   if (s.link.on) {
     const wl = ctx.config.antiLink?.whitelist || [];
-    const bad = (body.match(LINK) || []).filter((l) => !wl.some((w) => l.toLowerCase().includes(w.toLowerCase())));
+    const hostOf = (link) => {
+      try { return new URL(/^[a-z]+:\/\//i.test(link) ? link : `http://${link}`).hostname.toLowerCase().replace(/^www\./, ''); }
+      catch { return link.toLowerCase(); }
+    };
+    const allowed = (host) => wl.some((w) => { const x = String(w).toLowerCase().replace(/^www\./, ''); return host === x || host.endsWith('.' + x); });
+    const bad = (body.match(LINK) || []).filter((l) => !allowed(hostOf(l)));
     if (bad.length) return ['link', 'posting a link'];
   }
   if (s.badword.on) {
@@ -59,7 +64,7 @@ module.exports = {
 
       await ctx.sock.sendMessage(ctx.jid, { delete: ctx.m.key }).catch(() => {});
       if (action === 'kick') {
-        await ctx.group.kick(ctx.sender);
+        await ctx.group.kick(ctx.sender).catch(() => {});
         await ctx.reply(`🚫 ${who} removed for ${reason}.`, opts);
       } else if (action === 'warn') {
         const w = await addWarn(ctx, ctx.sender);
