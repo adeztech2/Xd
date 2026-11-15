@@ -28,16 +28,16 @@ module.exports = {
   autoTyping: true,
   autoStatusView: true,
   autoStatusReact: { enabled: true, emoji: '💚' },
-  autoReact: { enabled: true, emojis: ['🙏', '❤️', '👍', '😂', '🔥'] },
   autoRecording: false,
   chatbot: { enabled: false },
 
   antiCall: true,
   antiDelete: true,
-  antiEdit: true,
-  antiLink: { enabled: true, action: 'kick', whitelist: ['youtube.com', 'youtu.be'] },
+  antiEdit: false, // owner can enable: .toggle antiedit on (it posts a public notice on every edit)
+  antiLink: { enabled: true, action: 'delete', whitelist: ['youtube.com', 'youtu.be'] },
   warnLimit: 3,
-  antiBadword: { enabled: true, action: 'delete', words: ['spam'] },
+  // Words come from BADWORDS (comma separated). Empty = nothing is deleted.
+  antiBadword: { enabled: true, action: 'delete', words: (process.env.BADWORDS || '').split(',').map((w) => w.trim()).filter(Boolean) },
 
   welcome: true,
   welcomeMessage: 'Welcome @user 👋\nType .menu for commands',
