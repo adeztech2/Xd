@@ -1,13 +1,12 @@
-// Send visible group event notifications and detect edited group messages.
+// Group event notices. Switch per group with the .events on|off command (commands/group.js).
+// Edit notices come from plugins/anti-edit.js only.
 const attached = new WeakSet();
-const recent = new Map();
-const MAX_TRACKED = 1000;
 module.exports = {
   name: 'group-events',
   events: {
     message: async (ctx, { db }) => {
       const ev = ctx.sock.ev;
-      if (!attached.has(ev)) {
+      if (ev && !attached.has(ev)) {
         attached.add(ev);
         ev.on('group-participants.update', async (event) => {
           try {
@@ -25,35 +24,7 @@ module.exports = {
             } catch (error) { console.error('group settings notification error:', error.message); }
           }
         });
-        ev.on('messages.upsert', async ({ messages, type }) => {
-          if (type !== 'notify') return;
-          for (const message of messages || []) {
-            const protocol = message.message?.protocolMessage;
-            const groupId = message.key.remoteJid;
-            if (!groupId?.endsWith('@g.us')) continue;
-            if (protocol?.type === 14) {
-              try {
-                if (!ctx.config.antiEdit || !(await db.get(`group-events:${groupId}`))) continue;
-                const original = recent.get(protocol.key?.id);
-                const editedMessage = protocol.editedMessage || {};
-                const updated = editedMessage.conversation || editedMessage.extendedTextMessage?.text || '[edited media/message]';
-                await ctx.sock.sendMessage(groupId, { text: `Edited message detected.\nBefore: ${original || '[not in recent cache]'}\nAfter: ${String(updated).slice(0, 600)}` });
-              } catch (error) { console.error('anti-edit notification error:', error.message); }
-              continue;
-            }
-            const content = message.message?.conversation || message.message?.extendedTextMessage?.text || message.message?.imageMessage?.caption || message.message?.videoMessage?.caption;
-            if (message.key.id && content) {
-              recent.set(message.key.id, String(content).slice(0, 600));
-              if (recent.size > MAX_TRACKED) recent.delete(recent.keys().next().value);
-            }
-          }
-        });
       }
-      const eventCommand = (ctx.body || '').trim().match(/^\.?events\s+(on|off)$/i);
-      if (!eventCommand || !ctx.isGroup || !ctx.isAdmin) return;
-      const enabled = eventCommand[1].toLowerCase() === 'on';
-      await db.set(`group-events:${ctx.jid}`, enabled);
-      await ctx.reply(`Group event monitoring turned ${enabled ? 'on' : 'off'}.`);
     },
   },
 };
