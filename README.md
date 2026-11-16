@@ -1,7 +1,7 @@
 <h1 align="center">ADEZ XMD</h1>
 
 <div style="text-align: center;">
-  <a href="https://github.com/adeztech2/adez-xmd">
+  <a href="https://github.com/adeztech2/Xd">
     <img src="https://u.pone.rs/tntebijt.jpeg" alt="ADEZ XMD" border="0" width="300" /></a>
   <hr style="margin-top: 20px; margin-bottom: 20px;"/>
 </div>
@@ -12,7 +12,7 @@
       <b>FORK</b><br>
       Fork the repository to customize and use the bot for your needs.
       <br><br>
-      <a href="https://github.com/adeztech2/adez-xmd/fork">
+      <a href="https://github.com/adeztech2/Xd/fork">
         <img src="https://img.shields.io/badge/FORK-this%20repo-purple" alt="Fork ADEZ XMD" width="150">
       </a>
     </td>
@@ -30,7 +30,7 @@
       <b>DOWNLOAD ZIP</b><br>
       Download the latest ADEZ XMD zip.
       <br><br>
-      <a href="https://github.com/adeztech2/adez-xmd/archive/refs/heads/main.zip">
+      <a href="https://github.com/adeztech2/Xd/archive/refs/heads/main.zip">
         <img src="https://img.shields.io/badge/Download-ZIP-blue" alt="Download zip" width="200">
       </a>
     </td>
@@ -42,7 +42,7 @@
         <img src="https://img.shields.io/badge/Deploy-STANY%20NEXUS-brightgreen" alt="Deploy on STANY NEXUS" width="200">
       </a>
       <br><br>
-      <a href="https://heroku.com/deploy?template=https://github.com/adeztech2/adez-xmd">
+      <a href="https://heroku.com/deploy?template=https://github.com/adeztech2/Xd">
         <img src="https://www.herokucdn.com/deploy/button.svg" alt="Deploy to Heroku">
       </a>
     </td>
