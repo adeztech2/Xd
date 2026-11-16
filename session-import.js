@@ -45,9 +45,11 @@ function parseSessionId(raw) {
   return parseBundle(raw).creds;
 }
 
-// "pre-key-5.json" -> "pre-key-5" (the database key). Returns null for any file this bot does not accept.
+// "pre-key-5.json" -> "pre-key-5" and "session-123@s.whatsapp.net.json" -> its key ID.
+// Baileys' file store leaves @ in JIDs but replaces / with __ and : with -.
+// Keep a strict filename allowlist so imported bundles cannot write outside the auth folder.
 function keyIdFromFile(file) {
-  if (!/^[A-Za-z0-9_.\-]{1,200}\.json$/.test(file)) return null; // no slashes, so no path tricks
+  if (!/^[A-Za-z0-9_.@\-]{1,200}\.json$/.test(file)) return null; // no slashes, so no path tricks
   const name = file.slice(0, -5);
   if (!BUNDLE_TYPES.some((t) => name.startsWith(t + '-'))) return null;
   return name.replace(/__/g, '/');
