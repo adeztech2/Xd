@@ -28,6 +28,7 @@ module.exports = {
   autoTyping: true,
   autoStatusView: true,
   autoStatusReact: { enabled: true, emoji: '💚' },
+  autoReact: { enabled: true, emojis: ['🙏', '❤️', '👍', '😂', '🔥'] },
   autoRecording: false,
   chatbot: { enabled: false },
 
