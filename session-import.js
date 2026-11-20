@@ -16,8 +16,8 @@ const REJECTED_FILE = path.join(process.cwd(), 'data', 'rejected-session.txt');
 
 // Key files the pair page may bundle with the login. They hold the one-time pre-keys and the
 // encryption sessions made while linking, which the bot needs to read the first messages.
-const BUNDLE_TYPES = ['app-state-sync-version', 'app-state-sync-key', 'lid-mapping', 'device-list', 'pre-key', 'session'];
-const MAX_KEYS = 600;
+const BUNDLE_TYPES = ['app-state-sync-version', 'app-state-sync-key', 'sender-key-memory', 'sender-key', 'lid-mapping', 'device-list', 'pre-key', 'session'];
+const MAX_KEYS = 2000;
 const MAX_KEY_CHARS = 200000;
 
 // Accepts ADEZ-XMD~<base64 of creds.json>, the same gzipped, and the newer bundle
