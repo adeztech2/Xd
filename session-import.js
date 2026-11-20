@@ -121,7 +121,7 @@ async function importSession() {
     creds = bundle.creds;
     keys = usableKeys(bundle.keys);
   } catch (e) {
-    console.error(`SESSION_ID is not valid (${e.message}), ignoring it.`);
+    console.error(`SESSION_ID is not valid (${e.message}), ignoring it. Received ${raw.length} characters.`);
     return;
   }
 
